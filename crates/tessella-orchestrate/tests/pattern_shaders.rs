@@ -935,3 +935,270 @@ fn a_line_patterns_period_is_measured_at_the_views_zoom() {
         "the camera's integer zoom, not its own"
     );
 }
+
+/// A patterned background's drawable block carries the tile's origin and ratio.
+///
+/// `BackgroundPatternDrawableUBO` is the matrix, the pixel origin and `tile_units_to_pixels`,
+/// where a plain background's block is the matrix alone -- so the plain packer written here
+/// leaves the last three fields at zero. A zero ratio drops the world position out of
+/// `patternPos` entirely and every fragment samples the rectangle's own corner, which in a padded
+/// atlas is the padding: a capture of such a frame replayed on `tessella_emblema` drew 749,126 of
+/// 786,432 pixels at `[0, 0, 0, 0]`, and 327,572 of the sprite's own blue once the block was
+/// right.
+///
+/// The same trap `PatternDrawableEntry` documents for the fill. It went unnoticed longer here
+/// because a plain background needs no origin at all -- there is nothing in the family's own
+/// block to be suspicious of.
+#[test]
+fn a_patterned_background_carries_its_tiles_origin() {
+    use tessella_capture_abi::envelope::UboUpdate;
+
+    const BACKGROUND: &str = r#"{"version": 8, "sources": {},
+      "layers": [{"id": "bg", "type": "background",
+                  "paint": {"background-pattern": "sand_noise"}}]}"#;
+
+    let positions = atlas();
+    let pixels = vec![0u8; 512 * 512 * 4];
+    let patterns = Patterns {
+        revision: 0,
+        texture: TextureId(20),
+        size: [512, 512],
+        positions: &positions,
+        pixels: &pixels,
+        history: ZoomHistory::new(),
+    };
+    let style = Style::parse(BACKGROUND).expect("parses");
+    let view = camera::settled(&ViewTransform {
+        longitude: 0.0,
+        latitude: 0.0,
+        zoom: 2.0,
+        width: 512.0,
+        height: 512.0,
+        bearing: 0.0,
+        pitch: 0.0,
+        ground_below: 0.0,
+    });
+    let tiles = cover::cover(&view).expect("covers");
+    let buckets: Vec<(TileId, Arc<Vec<tessella_orchestrate::tile::LayerBucket>>)> = tiles
+        .iter()
+        .map(|tile| {
+            let id = TileId::new(tile.z, tile.x, tile.y);
+            (
+                id,
+                Arc::new(build_sourceless(&style, id).expect("background")),
+            )
+        })
+        .collect();
+
+    let mut arena = SlabArena::new();
+    let mut ring = Ring::new(1 << 22);
+    let (producer, consumer) = ring.split();
+    frame::emit(
+        producer,
+        &mut arena,
+        &Frame {
+            published_projection: None,
+            projection: ProjectionMode::Mercator,
+            style: &style,
+            view: &view,
+            view_id: ViewId(0),
+            tiles: &tiles,
+            buckets: &buckets,
+            origins: &[],
+            light: &Light::default(),
+            fonts: None,
+            patterns: Some(&patterns),
+            states: None,
+        },
+    )
+    .expect("emits");
+
+    let mut drawables = Vec::new();
+    while let Some(record) = consumer.peek() {
+        if record.kind == EnvelopeKind::UboUpdate
+            && let Some(update) = UboUpdate::from_bytes(record.record)
+            && update.slot == tessella_orchestrate::ubo::drawable_slot()
+            && update.layer_index == 0
+        {
+            let start = update.data.offset as usize;
+            let end = start + update.data.count as usize;
+            if let Some(bytes) = record.payload.get(start..end) {
+                drawables = bytes.to_vec();
+            }
+        }
+        let consumed = record.consumed();
+        consumer.advance(consumed);
+    }
+
+    let stride =
+        tessella_capture_abi::generated::ubo_layouts::BACKGROUND_DRAWABLE_UNION_UBO.stride as usize;
+    assert!(
+        !drawables.is_empty(),
+        "no background drawables were written"
+    );
+    assert_eq!(drawables.len() % stride, 0, "whole blocks");
+    let word =
+        |at: usize| f32::from_le_bytes(drawables[at..at + 4].try_into().expect("four bytes"));
+    // The extent over the pixels a tile covers, at a cover sitting at the camera's own level:
+    // 512 over 8192, which is the same sixteenth every other pattern block carries.
+    assert_eq!(
+        word(80),
+        0.0625,
+        "tile_units_to_pixels, which a plain background's block has no room for"
+    );
+    // And the origin, which for the first tile of a z2 cover is a whole number of pixels under
+    // 65,536 -- so the high half is zero and the low half is not.
+    assert!(
+        (0..4).any(|i| word(64 + i * 4) != 0.0),
+        "the pixel origin is all zeros, which is what the plain block leaves"
+    );
+}
+
+/// The sheet's size reaches the frame-wide block on the frame the sheet arrives.
+///
+/// `GlobalPaintParamsUBO.pattern_atlas_texsize` is the only place a background pattern reads the
+/// atlas size from -- mbgl's shader takes `paintParams.pattern_atlas_texsize` where a fill and a
+/// line carry it in their own blocks -- and that block is written when the camera moves, because
+/// everything else in it is derived from the viewport. A sheet is fetched, so it lands on
+/// whatever frame it lands on, which is usually one where the camera is still: the block then
+/// still says the size it had before, which is zero, and the fragment divides its rectangles by
+/// it.
+///
+/// Two frames through one session, which is the only way to ask: the first with no sheet and the
+/// second with one, camera unmoved.
+#[test]
+fn the_sheets_size_reaches_the_frame_wide_block_when_it_lands() {
+    use tessella_capture_abi::envelope::UboUpdate;
+    use tessella_capture_abi::generated::ubo_slots;
+    use tessella_orchestrate::registry::Session;
+
+    const BACKGROUND: &str = r#"{"version": 8, "sources": {},
+      "layers": [{"id": "bg", "type": "background",
+                  "paint": {"background-pattern": "sand_noise"}}]}"#;
+
+    let positions = atlas();
+    let pixels = vec![0u8; 512 * 512 * 4];
+    let patterns = Patterns {
+        revision: 0,
+        texture: TextureId(20),
+        size: [512, 512],
+        positions: &positions,
+        pixels: &pixels,
+        history: ZoomHistory::new(),
+    };
+    let style = Style::parse(BACKGROUND).expect("parses");
+    let view = camera::settled(&ViewTransform {
+        longitude: 0.0,
+        latitude: 0.0,
+        zoom: 2.0,
+        width: 512.0,
+        height: 512.0,
+        bearing: 0.0,
+        pitch: 0.0,
+        ground_below: 0.0,
+    });
+    let tiles = cover::cover(&view).expect("covers");
+    let buckets: Vec<(TileId, Arc<Vec<tessella_orchestrate::tile::LayerBucket>>)> = tiles
+        .iter()
+        .map(|tile| {
+            let id = TileId::new(tile.z, tile.x, tile.y);
+            (
+                id,
+                Arc::new(build_sourceless(&style, id).expect("background")),
+            )
+        })
+        .collect();
+
+    let mut arena = SlabArena::new();
+    let mut session = Session::new();
+    let mut symbols = frame::SymbolCache::default();
+    let mut placement = frame::PlacementState::new();
+
+    // The atlas size the frame-wide block carries, or `None` where the frame did not write it.
+    let atlas_of = |sprites: Option<&Patterns<'_>>,
+                    arena: &mut SlabArena,
+                    session: &mut Session,
+                    symbols: &mut frame::SymbolCache,
+                    placement: &mut frame::PlacementState|
+     -> Option<[f32; 2]> {
+        let mut ring = Ring::new(1 << 22);
+        let (producer, consumer) = ring.split();
+        frame::emit_incremental(
+            producer,
+            arena,
+            symbols,
+            placement,
+            &Frame {
+                published_projection: None,
+                projection: ProjectionMode::Mercator,
+                style: &style,
+                view: &view,
+                view_id: ViewId(0),
+                tiles: &tiles,
+                buckets: &buckets,
+                origins: &[],
+                light: &Light::default(),
+                fonts: None,
+                patterns: sprites,
+                states: None,
+            },
+            session,
+        )
+        .expect("emits");
+
+        let mut found = None;
+        while let Some(record) = consumer.peek() {
+            if record.kind == EnvelopeKind::UboUpdate
+                && let Some(update) = UboUpdate::from_bytes(record.record)
+                && update.slot == ubo_slots::ID_GLOBAL_PAINT_PARAMS_UBO
+            {
+                let start = update.data.offset as usize;
+                let end = start + update.data.count as usize;
+                if let Some(bytes) = record.payload.get(start..end)
+                    && bytes.len() >= 8
+                {
+                    found = Some([
+                        f32::from_le_bytes(bytes[0..4].try_into().expect("four bytes")),
+                        f32::from_le_bytes(bytes[4..8].try_into().expect("four bytes")),
+                    ]);
+                }
+            }
+            let consumed = record.consumed();
+            consumer.advance(consumed);
+        }
+        found
+    };
+
+    // The first frame declares the view, so the block is written whatever else is true -- with
+    // no sheet to report.
+    assert_eq!(
+        atlas_of(None, &mut arena, &mut session, &mut symbols, &mut placement),
+        Some([0.0, 0.0]),
+        "the first frame writes the block with no sheet in it"
+    );
+    // The second: same camera, sheet in hand.
+    assert_eq!(
+        atlas_of(
+            Some(&patterns),
+            &mut arena,
+            &mut session,
+            &mut symbols,
+            &mut placement
+        ),
+        Some([512.0, 512.0]),
+        "the frame the sheet lands on writes the block again"
+    );
+    // And a third, with nothing changed, writes nothing: the gate is the value, not the sheet's
+    // presence.
+    assert_eq!(
+        atlas_of(
+            Some(&patterns),
+            &mut arena,
+            &mut session,
+            &mut symbols,
+            &mut placement
+        ),
+        None,
+        "a quiet frame leaves the block alone"
+    );
+}

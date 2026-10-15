@@ -1602,6 +1602,92 @@ pub fn pack_fill_pattern_drawable_buffer(entries: &[PatternDrawableEntry], strid
     out
 }
 
+/// One background-pattern drawable's entry.
+///
+/// `BackgroundPatternDrawableUBO` is the matrix, the tile's pixel origin and the ratio, where a
+/// plain background's block is the matrix and nothing else. The same trap [`PatternDrawableEntry`]
+/// documents, in the family with the least reason to expect it: a background is one quad per
+/// cover tile and the plain one needs no origin at all, so writing the plain block leaves
+/// `tile_units_to_pixels` at zero -- and a zero ratio drops the world position out of
+/// `patternPos` entirely, so every fragment samples the rectangle's own corner. In a padded atlas
+/// that corner is the padding. Measured by replaying a capture on `tessella_emblema`, which draws
+/// this family: 749,126 pixels of 786,432 at `[0, 0, 0, 0]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BackgroundPatternDrawableEntry {
+    /// Tile-local to clip.
+    pub matrix: [f32; 16],
+    /// The tile's pixel origin, high half.
+    pub pixel_coord_upper: [f32; 2],
+    /// The low half.
+    pub pixel_coord_lower: [f32; 2],
+    /// The tile's extent over the pixels it covers, which mbgl names
+    /// `tile_units_to_pixels` here and `tile_ratio` in the fill's block.
+    pub tile_units_to_pixels: f32,
+}
+
+impl BackgroundPatternDrawableEntry {
+    /// The entry for one cover tile under a view.
+    ///
+    /// # Errors
+    ///
+    /// [`camera::CameraError`] when the view has no area.
+    pub fn for_tile(
+        view: &ViewTransform,
+        projection: ProjectionMode,
+        z: u8,
+        x: u32,
+        y: u32,
+        wrap: i32,
+        layer_index: i32,
+    ) -> Result<Self, camera::CameraError> {
+        // Sub-layer zero: a background has one drawable per tile and nothing to sort against
+        // inside the layer.
+        let matrix = DrawableEntry::for_tile_with(
+            view,
+            projection,
+            z,
+            x,
+            y,
+            wrap,
+            layer_index,
+            0,
+            [0.0, 0.0],
+        )?
+        .matrix;
+        let origin = PixelOrigin::of(view, z, x, y, wrap);
+        Ok(Self {
+            matrix,
+            pixel_coord_upper: origin.upper,
+            pixel_coord_lower: origin.lower,
+            tile_units_to_pixels: origin.tile_ratio,
+        })
+    }
+}
+
+/// A background-pattern layer's consolidated drawable buffer.
+#[must_use]
+pub fn pack_background_pattern_drawable_buffer(
+    entries: &[BackgroundPatternDrawableEntry],
+    stride: u32,
+) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = alloc::vec![0u8; stride * entries.len()];
+    for (entry, slot) in entries.iter().zip(out.chunks_exact_mut(stride)) {
+        let mut at = 0usize;
+        let put = |slot: &mut [u8], at: &mut usize, values: &[f32]| {
+            for value in values {
+                slot[*at..*at + 4].copy_from_slice(&value.to_le_bytes());
+                *at += 4;
+            }
+        };
+        put(slot, &mut at, &entry.matrix);
+        put(slot, &mut at, &entry.pixel_coord_upper);
+        put(slot, &mut at, &entry.pixel_coord_lower);
+        put(slot, &mut at, &[entry.tile_units_to_pixels]);
+    }
+    out
+}
+
 /// A fill-extrusion layer's consolidated drawable buffer.
 #[must_use]
 pub fn pack_extrusion_drawable_buffer(entries: &[ExtrusionDrawableEntry], stride: u32) -> Vec<u8> {

@@ -220,6 +220,34 @@ that.
   frame while raising the gross from 124 to 195, because a light sprite at 0.6 over a light ground
   differs from the same sprite at 1.0 by less than the threshold's 48 per channel — the control is
   `gross.py <before> <after> 8`, and that number is what says the term is read at all.
+- `background_pattern_p` — a background with `background-pattern` and the roads over it, which is
+  the whole scene. Not `families_p` with one property changed, like the other pattern scenes: a
+  background is the layer *under* everything, and under that style's raster and fills there is
+  almost none of it left to look at. Here it is the viewport, which makes it the sharpest test of
+  a pattern's placement in the suite and the sharpest test of its atlas's edges as well.
+
+  It found both halves of tessella#398 and is why that issue exists. A patterned background was
+  reaching its shader with the *plain* background's drawable block — no pixel origin and a zero
+  ratio, which takes the world position out of `patternPos` and leaves every fragment sampling the
+  rectangle's own corner — and with `pattern_atlas_texsize` still zero, because the frame-wide
+  block is written when the camera moves and a sprite sheet lands on whatever frame it lands on.
+
+      background_pattern_p  z14 p0   462,804 of 786,432   both wrong
+                                      21,823              both fixed
+
+  **Not in the sweep**, and tessella#397 is why. What is left is a thin outline around every copy
+  of the sprite, 100% of it brighter on this side: the atlas pads each image with a transparent
+  pixel where mbgl pads a *pattern* with the image's opposite edge, so that a tiled sprite wraps
+  into itself under a linear sampler. It scales with the sprite's own contrast and with nothing
+  else:
+
+      interstate_3    contrast 244   21,823
+      grass_pattern   contrast  14      174
+      sand_noise      contrast   9        0
+
+  The scene keeps `interstate_3` even so, because that contrast is what makes it catch the
+  arithmetic at all: over `sand_noise` the broken drawable block reads 0 too. The row joins the
+  sweep when the padding does.
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
   then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.
