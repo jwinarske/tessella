@@ -116,6 +116,11 @@ pub struct GeometryRegistry {
     view: u32,
     /// Keys this frame allocated, so a frame that fails can give them back.
     added: BTreeSet<DrawableKey>,
+    /// Keys this frame has announced, which must not also be displaced.
+    ///
+    /// See [`Self::displaceable`]. Cleared by [`Self::begin_frame`], so it is this frame's
+    /// answer and not the last one's.
+    announced: BTreeSet<DrawableKey>,
     /// Slab ranges this frame has decided to let go, applied on [`Self::retire`].
     releasing: Vec<SlabRef>,
     /// What this frame's re-announcements displaced, so [`Self::rollback`] can put it back.
@@ -143,6 +148,7 @@ impl GeometryRegistry {
     pub fn begin_frame(&mut self, view: ViewId) {
         self.seen.clear();
         self.added.clear();
+        self.announced.clear();
         self.view = view.0;
         self.next_at_frame_start = self.next;
     }
@@ -191,6 +197,7 @@ impl GeometryRegistry {
     /// Staged, not released, for [`Self::retire`]'s reason: a frame that then fails must not
     /// have moved the arena.
     pub fn record_refs(&mut self, key: DrawableKey, refs: alloc::vec::Vec<SlabRef>, at: u64) {
+        self.announced.insert(key);
         if let Some(entry) = self.live.get_mut(&key) {
             if !entry.refs.is_empty() {
                 self.replaced
@@ -397,6 +404,29 @@ impl GeometryRegistry {
     /// What matters is the ratio of bytes held to bytes occupied. A slab with one live geometry
     /// out of two hundred is worth emptying; one with one out of two is not, and neither is
     /// decided by how many drawables are in it.
+    ///
+    /// # Never what this frame announced
+    ///
+    /// Displacement is for a drawable the consumer *already holds*: releasing it and forgetting
+    /// it is how the next frame comes to announce it into a fresh slab. Applied to one this
+    /// frame just announced, every part of that goes wrong at once. The release tells the
+    /// consumer to drop a drawable it has only this moment been given, and `displace` hands the
+    /// bytes of the record just written back to the arena -- which sweeps the slab at the
+    /// frame's commit, before a consumer draining at its own pace has read a single record of
+    /// that frame. What arrives at the far end is an announcement whose index reference resolves
+    /// to nothing, which `FilamentRenderer::onGeometry` drops with no diagnostic but a counter.
+    ///
+    /// It takes a quiet producer to make that permanent, and that is why it went unseen: a
+    /// moving map announces the drawable again next frame and the picture repairs itself within
+    /// one. A settled frame has no next frame, so the drawable is gone until something moves.
+    /// tessella#403, where a displacement in the frame that announced them cost four of a
+    /// basemap's label drawables and 857 gross pixels on `display-a-popup-on-hover`.
+    ///
+    /// What dragged those slabs below the threshold in the first place is #303's skip: a symbol
+    /// drawable whose announcement is skipped leaves its bytes in the slab with nothing holding
+    /// them, so the slab reads as mostly dead while every drawable in it is alive. That is the
+    /// condition this exclusion makes safe rather than the defect itself -- a slab can fall
+    /// below the threshold honestly, and a fresh announcement in it must still not be displaced.
     #[must_use]
     pub fn displaceable(
         &self,
@@ -406,6 +436,7 @@ impl GeometryRegistry {
         let view = self.view;
         self.live
             .iter()
+            .filter(|(key, _)| !self.announced.contains(*key))
             .filter(|(_, entry)| entry.users.len() == 1 && entry.users.contains(&view))
             .filter(|(_, entry)| {
                 entry.refs.iter().any(|reference| {
