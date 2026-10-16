@@ -751,39 +751,62 @@ pub fn build_tile_on_with_patterns(
                             continue;
                         }
 
-                        // A label is clipped by whether its *anchor* is on the tile, not by cutting
-                        // its geometry: half a road name is not a label, and a point label has no
-                        // geometry to cut. So the rings go in whole and placement decides.
+                        // Clipped to the buffered tile, like every other geometry kind here.
                         //
-                        // Rounded to tile units, as every other geometry kind here is. A fill or a
-                        // line goes through `to_tile_ring`, which rounds because that is what
-                        // geojson-vt does to a tile's coordinates before mbgl ever sees them; this
-                        // path did not, and the symbol vertex packs its anchor by *truncating*. So a
-                        // label whose anchor fell at 6317.68 was drawn at 6317 where the capture has
-                        // 6318 — every point label up to a tile unit out, in a way no test could see
-                        // until the probe emitted a per-attribute hash and the parity test stopped
-                        // using its own projection.
+                        // What a symbol layout reads is a *tile's* geometry: geojson-vt cuts the
+                        // feature to `[-buffer, EXTENT + buffer]` once, before mbgl sees it, and
+                        // every placement downstream is measured against the piece that cut left.
+                        // This path handed over the whole feature instead, and the layout's own
+                        // `clipLines` hid it for `symbol-placement: line` -- clipping the world
+                        // line to the tile box and clipping the already-cut piece to it give the
+                        // same runs. `line-center` is the placement that does not clip, by
+                        // design, and there the difference is the whole of it: a center taken on
+                        // the feature rather than on the part of it that is here, which is one
+                        // label at the midpoint of the road instead of one per tile it crosses.
+                        //
+                        // Rounded to tile units, because that is what geojson-vt does to a
+                        // tile's coordinates before mbgl ever sees them, and the symbol vertex
+                        // packs its anchor by *truncating*: a label whose anchor fell at 6317.68
+                        // was drawn at 6317 where the capture has 6318 -- every point label up to
+                        // a tile unit out, in a way no test could see until the probe emitted a
+                        // per-attribute hash and the parity test stopped using its own
+                        // projection.
+                        //
+                        // Rounded *after* the clip, which is geojson-vt's order and not a detail:
+                        // an intersection with the box is computed in the projected coordinates,
+                        // and rounding first would move the cut.
                         #[allow(clippy::cast_possible_truncation)]
-                        let to_tile_units = |p: &[f64; 2]| {
-                            let at = project(p);
-                            (at[0].round() as f32, at[1].round() as f32)
+                        let round = |p: &[f64; 2]| (p[0].round() as f32, p[1].round() as f32);
+                        let projected = |points: &[[f64; 2]]| -> Vec<[f64; 2]> {
+                            points.iter().map(project).collect()
                         };
                         let rings: Vec<Vec<(f32, f32)>> = match &feature.geometry {
-                            Geometry::Point(points) => points
-                                .iter()
-                                .map(|point| alloc::vec![to_tile_units(point)])
-                                .collect(),
+                            // A point set has no edges to intersect the box with, so it is kept
+                            // or dropped point by point rather than clipped.
+                            Geometry::Point(points) => {
+                                clip_points_to_box(&projected(points), lo, hi)
+                                    .iter()
+                                    .map(|point| alloc::vec![round(point)])
+                                    .collect()
+                            }
+                            // Each piece is a ring of its own: a road that leaves the box and
+                            // comes back is two runs there and must not be one here.
                             Geometry::LineString(lines) => lines
                                 .iter()
-                                .map(|line| line.iter().map(&to_tile_units).collect())
+                                .flat_map(|line| clip_line_to_box(&projected(line), lo, hi))
+                                .map(|piece| piece.iter().map(round).collect())
                                 .collect(),
                             // A polygon labels at its rings, which is what mbgl does when a symbol
                             // layer reads an area source: the outline is what a line-placed label
-                            // follows, and the first vertex is what a point-placed one anchors to.
+                            // follows, and the pole of inaccessibility is what a point-placed one
+                            // anchors to. Clipped as rings, so a ring that leaves the box
+                            // re-enters along the box edge rather than being cut open.
                             Geometry::Polygon(polygons) => polygons
                                 .iter()
                                 .flatten()
-                                .map(|ring| ring.iter().map(&to_tile_units).collect())
+                                .map(|ring| clip_ring_to_box(&projected(ring), lo, hi))
+                                .filter(|ring| !ring.is_empty())
+                                .map(|ring| ring.iter().map(round).collect())
                                 .collect(),
                         };
 

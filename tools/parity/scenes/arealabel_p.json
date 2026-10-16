@@ -1,0 +1,402 @@
+{
+ "version": 8,
+ "name": "area-label-parity",
+ "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
+ "sources": {
+  "areas": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "ell",
+       "name": "ELL"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          13.3856023,
+          52.5224547
+         ],
+         [
+          13.3954728,
+          52.5224547
+         ],
+         [
+          13.3954728,
+          52.5258494
+         ],
+         [
+          13.3911813,
+          52.5258494
+         ],
+         [
+          13.3911813,
+          52.5274162
+         ],
+         [
+          13.3856023,
+          52.5274162
+         ],
+         [
+          13.3856023,
+          52.5224547
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "donut",
+       "name": "DONUT"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          13.3980477,
+          52.5224547
+         ],
+         [
+          13.4083474,
+          52.5224547
+         ],
+         [
+          13.4083474,
+          52.5274162
+         ],
+         [
+          13.3980477,
+          52.5274162
+         ],
+         [
+          13.3980477,
+          52.5224547
+         ]
+        ],
+        [
+         [
+          13.4001935,
+          52.5234992
+         ],
+         [
+          13.4001935,
+          52.5263717
+         ],
+         [
+          13.4062016,
+          52.5263717
+         ],
+         [
+          13.4062016,
+          52.5234992
+         ],
+         [
+          13.4001935,
+          52.5234992
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "twin",
+       "name": "TWIN"
+      },
+      "geometry": {
+       "type": "MultiPolygon",
+       "coordinates": [
+        [
+         [
+          [
+           13.3856023,
+           52.5167097
+          ],
+          [
+           13.390323,
+           52.5167097
+          ],
+          [
+           13.390323,
+           52.5195822
+          ],
+          [
+           13.3856023,
+           52.5195822
+          ],
+          [
+           13.3856023,
+           52.5167097
+          ]
+         ]
+        ],
+        [
+         [
+          [
+           13.3911813,
+           52.5167097
+          ],
+          [
+           13.3959019,
+           52.5167097
+          ],
+          [
+           13.3959019,
+           52.5195822
+          ],
+          [
+           13.3911813,
+           52.5195822
+          ],
+          [
+           13.3911813,
+           52.5167097
+          ]
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "square",
+       "name": "SQUARE"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          13.3980477,
+          52.5146207
+         ],
+         [
+          13.4083474,
+          52.5146207
+         ],
+         [
+          13.4083474,
+          52.5195822
+         ],
+         [
+          13.3980477,
+          52.5195822
+         ],
+         [
+          13.3980477,
+          52.5146207
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "star",
+       "name": "STAR"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          13.4223533,
+          52.5162209
+         ],
+         [
+          13.4209961,
+          52.5213245
+         ],
+         [
+          13.4119195,
+          52.5225861
+         ],
+         [
+          13.4094733,
+          52.5176376
+         ],
+         [
+          13.4094733,
+          52.5148041
+         ],
+         [
+          13.4125149,
+          52.5114464
+         ],
+         [
+          13.4193224,
+          52.5123931
+         ],
+         [
+          13.4223533,
+          52.5162209
+         ]
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#f4f1ea"
+   }
+  },
+  {
+   "id": "ell",
+   "type": "symbol",
+   "source": "areas",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "ell"
+   ],
+   "layout": {
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "donut",
+   "type": "symbol",
+   "source": "areas",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "donut"
+   ],
+   "layout": {
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "twin",
+   "type": "symbol",
+   "source": "areas",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "twin"
+   ],
+   "layout": {
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "square",
+   "type": "symbol",
+   "source": "areas",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "square"
+   ],
+   "layout": {
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "star",
+   "type": "symbol",
+   "source": "areas",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "star"
+   ],
+   "layout": {
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  }
+ ]
+}

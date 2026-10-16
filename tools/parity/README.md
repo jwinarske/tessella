@@ -309,6 +309,44 @@ that.
   of `stretch_p`. Fitted to the same wide label, the stretch-only sprite comes out 114 pixels
   across and the proportional one 98 — pulled back to its content box's aspect. Both read 0.
 
+- `linelabel_p` — nine shapes a name follows, on a plain ground. Nothing in the tree held
+  `symbol-placement: line` against the oracle before this: the one style that writes it is
+  `quad_remote.json`, and the quad runs on a single engine. So the whole of along-line placement —
+  the anchor spacing, the per-glyph walk, `text-keep-upright`, `text-max-angle`, the collision
+  circles a line label uses instead of a box, and the map-aligned branch of the symbol shader —
+  was implemented, unit-tested, and never compared to a pixel.
+
+  Eight of the nine read 0 the first time they were measured, which is the useful half of the
+  result: they are now evidence rather than hope. The ninth is `line-center`, and it found two
+  defects at once.
+
+      linelabel_p  z14 p0   1,727 of 786,432   the center of the road, from one tile
+                              523              the center of each tile's own run
+                                0              and only from the tiles it is in
+
+  A symbol layout reads a *tile's* geometry: geojson-vt cuts a feature to the buffered tile before
+  mbgl sees it, and `addSymbolInstance` then keeps only the anchors inside the tile proper. This
+  path handed the layout the whole feature, and `line-center` is the one placement that does not
+  clip for itself — so it put one name at the midpoint of the entire road. Clipping fixed where the
+  names go and exposed the second: a tile whose *buffer* a road merely reaches has a midpoint of
+  its own, and drawing it there is a second copy of the name a few hundred pixels from the first.
+
+  Four cameras, because along-line placement is reprojected every frame. A bearing is what turns a
+  name upside down and makes `text-keep-upright` flip it; a pitch is what bends the walk; the
+  second zoom is for the spacing, which is measured against the view's zoom and not the tile's.
+
+- `arealabel_p` — five areas with a point-placed name. A third anchoring rule again: mbgl labels a
+  polygon at its *pole of inaccessibility* — the center of the largest circle that fits inside it,
+  through `mapbox::polylabel` to one pixel of tile units — once per polygon. This anchored at a
+  ring's first vertex, which is a corner of the shape, and once per *ring*, so a hole got a name of
+  its own. 2,536 of 786,432, and 0 with the pole ported.
+
+  The star is in the scene for the queue rather than for the shape. polylabel is a best-first
+  search that stops short of the exact pole by `precision`, so where two cells are within that of
+  each other the answer is whichever the priority queue hands over first — `std::push_heap`'s
+  answer, and the oracle is built against libstdc++. One polygon in twenty is sensitive to it; this
+  is one of them, and run from a sorted queue instead of a sifted one the scene reads 242.
+
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
   then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.

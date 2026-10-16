@@ -179,3 +179,39 @@ fn adjust_heap<E: Copy>(
     }
     v[hole as usize] = value;
 }
+
+/// `std::push_heap(first, last)`: the last element sifted up into the heap before it.
+///
+/// `std::priority_queue::push` is this and nothing else, and which of several close elements ends
+/// up on top is decided here. mbgl's `polylabel` reads the top of such a queue and stops its
+/// search before the two separate, so on one polygon in twenty its answer is this sift's answer
+/// rather than the algorithm's -- see [`crate::polylabel`] for what that is worth in pixels.
+pub(crate) fn push_heap<E: Copy>(v: &mut [E], less: &impl Fn(&E, &E) -> bool) {
+    let len = v.len() as isize;
+    if len < 2 {
+        return;
+    }
+    let value = v[(len - 1) as usize];
+    let mut hole = len - 1;
+    let mut parent = (hole - 1) / 2;
+    while hole > 0 && less(&v[parent as usize], &value) {
+        v[hole as usize] = v[parent as usize];
+        hole = parent;
+        parent = (hole - 1) / 2;
+    }
+    v[hole as usize] = value;
+}
+
+/// `std::pop_heap(first, last)`: the top moved to the end and the hole closed.
+///
+/// `std::priority_queue::pop` is this followed by dropping the last element, which a caller does
+/// by truncating.
+pub(crate) fn pop_heap<E: Copy>(v: &mut [E], less: &impl Fn(&E, &E) -> bool) {
+    let len = v.len() as isize;
+    if len < 2 {
+        return;
+    }
+    let value = v[(len - 1) as usize];
+    v[(len - 1) as usize] = v[0];
+    adjust_heap(&mut v[..(len - 1) as usize], 0, len - 1, value, less);
+}

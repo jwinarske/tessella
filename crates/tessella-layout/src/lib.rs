@@ -35,6 +35,7 @@ mod libstdcxx;
 pub mod line;
 pub mod location_indicator;
 pub mod paint;
+pub mod polylabel;
 pub mod raster;
 pub mod size;
 pub mod subdivide;
