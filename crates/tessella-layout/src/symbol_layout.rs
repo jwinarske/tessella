@@ -335,6 +335,48 @@ fn clip_one(
     }
 }
 
+/// Where a point-placed symbol anchors, by the feature's own geometry type.
+///
+/// mbgl branches on the type rather than on the layer: `SymbolLayout::addFeature` ends in three
+/// arms, and an area is not labeled the way a line or a point is.
+///
+/// - A point anchors at itself, once per point.
+/// - A line anchors at its first vertex, once per ring.
+/// - An area anchors at its *pole of inaccessibility*, once per polygon — not per ring, so a
+///   hole does not get a label of its own, and not at a vertex, which is a corner of the shape
+///   rather than a place inside it.
+fn point_anchors(feature: &dyn Feature, rings: &[Vec<(f32, f32)>]) -> Vec<(f32, f32)> {
+    if feature.geometry_type() != "Polygon" {
+        return rings
+            .iter()
+            .filter_map(|ring| ring.first().copied())
+            .collect();
+    }
+    // "1 pixel worth of precision, in tile coordinates", which is mbgl's own comment on the
+    // argument it passes.
+    let precision = f64::from(EXTENT / TILE_SIZE);
+    crate::fill::classify_rings_by(rings, |ring| crate::fill::signed_area_of(ring))
+        .iter()
+        .filter_map(|polygon| {
+            let rings: Vec<Vec<crate::polylabel::Point>> = polygon
+                .iter()
+                .map(|ring| {
+                    ring.iter()
+                        .map(|&(x, y)| [f64::from(x), f64::from(y)])
+                        .collect()
+                })
+                .collect();
+            let borrowed: Vec<&[crate::polylabel::Point]> =
+                rings.iter().map(Vec::as_slice).collect();
+            crate::polylabel::polylabel(&borrowed, precision)
+        })
+        .map(|at| {
+            #[allow(clippy::cast_possible_truncation)]
+            (at[0] as f32, at[1] as f32)
+        })
+        .collect()
+}
+
 /// Reads a `*-anchor` value, defaulting the way the spec does.
 fn anchor_of(value: Option<&Value>) -> tessella_glyph::shaping::Anchor {
     use tessella_glyph::shaping::Anchor;
@@ -1076,36 +1118,32 @@ impl SymbolLayout {
             return;
         }
 
-        for ring in rings {
-            let anchorings = {
-                let Some(first) = ring.first() else { continue };
-                // A point label belongs to the tile it is in, and to no other. The features
-                // reaching this builder are the whole source rather than one tile's share, so
-                // without the test every tile of the cover draws every label — which looks
-                // right on the tile that owns it and wrong on its neighbors. Half-open, so a
-                // point on a boundary lands in exactly one tile.
-                if !(0.0..EXTENT).contains(&first.0) || !(0.0..EXTENT).contains(&first.1) {
-                    continue;
-                }
-                alloc::vec![Anchoring::Point(*first)]
-            };
+        // A point label belongs to the tile it is in, and to no other. The features reaching
+        // this builder are the whole source rather than one tile's share, so without the test
+        // every tile of the cover draws every label — which looks right on the tile that owns it
+        // and wrong on its neighbors. Half-open, so a point on a boundary lands in exactly one
+        // tile.
+        let on_tile =
+            |at: &(f32, f32)| (0.0..EXTENT).contains(&at.0) && (0.0..EXTENT).contains(&at.1);
 
-            for anchoring in anchorings {
-                self.insert(Pending {
-                    sort_key,
-                    text: text.clone(),
-                    sections: sections.clone(),
-                    icon: icon.clone(),
-                    fonts: fonts.clone(),
-                    anchoring,
-                    named: Named::of(feature),
-                    symbol: text_options(layer, zoom, Some(feature), &self.text_size),
-                    icon_options: icon_options(layer, zoom, Some(feature), &self.icon_size),
-                    // One feature can anchor several times -- a road named along its length is
-                    // one feature and several pendings -- and each of them carries the paint.
-                    paint: paint.clone(),
-                });
+        for at in point_anchors(feature, rings) {
+            if !on_tile(&at) {
+                continue;
             }
+            self.insert(Pending {
+                sort_key,
+                text: text.clone(),
+                sections: sections.clone(),
+                icon: icon.clone(),
+                fonts: fonts.clone(),
+                anchoring: Anchoring::Point(at),
+                named: Named::of(feature),
+                symbol: text_options(layer, zoom, Some(feature), &self.text_size),
+                icon_options: icon_options(layer, zoom, Some(feature), &self.icon_size),
+                // One feature can anchor several times -- a road named along its length is one
+                // feature and several pendings -- and each of them carries the paint.
+                paint: paint.clone(),
+            });
         }
     }
 

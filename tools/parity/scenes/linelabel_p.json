@@ -1,0 +1,392 @@
+{
+ "version": 8,
+ "name": "line-placement-parity",
+ "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
+ "sources": {
+  "roads": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "straight",
+       "name": "MAIN STREET"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         13.385688,
+         52.527599
+        ],
+        [
+         13.398563,
+         52.527599
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "straight",
+       "name": "KEEP UPRIGHT"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         13.424312,
+         52.527599
+        ],
+        [
+         13.411437,
+         52.527599
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "curved",
+       "name": "CURVED AVENUE"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         13.385688,
+         52.523813
+        ],
+        [
+         13.388907,
+         52.523296
+        ],
+        [
+         13.392125,
+         52.523081
+        ],
+        [
+         13.395344,
+         52.523296
+        ],
+        [
+         13.398563,
+         52.523813
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "curved",
+       "name": "DIAGONAL WAY"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         13.411437,
+         52.522298
+        ],
+        [
+         13.424312,
+         52.525327
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "sharp",
+       "name": "SHARP TURN ROAD"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         13.385688,
+         52.52
+        ],
+        [
+         13.392125,
+         52.52
+        ],
+        [
+         13.394614,
+         52.522899
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "crowd",
+       "name": "COLLIDE ONE"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         13.411437,
+         52.52
+        ],
+        [
+         13.424312,
+         52.52
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "crowd",
+       "name": "COLLIDE TWO"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         13.411437,
+         52.519791
+        ],
+        [
+         13.424312,
+         52.519791
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "repeat",
+       "name": "REPEAT"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         13.385259,
+         52.516187
+        ],
+        [
+         13.424741,
+         52.516187
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "center",
+       "name": "CENTER ONLY"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         13.385259,
+         52.512401
+        ],
+        [
+         13.424741,
+         52.512401
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#f4f1ea"
+   }
+  },
+  {
+   "id": "straight",
+   "type": "symbol",
+   "source": "roads",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "straight"
+   ],
+   "layout": {
+    "symbol-placement": "line",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "curved",
+   "type": "symbol",
+   "source": "roads",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "curved"
+   ],
+   "layout": {
+    "symbol-placement": "line",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "sharp",
+   "type": "symbol",
+   "source": "roads",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "sharp"
+   ],
+   "layout": {
+    "symbol-placement": "line",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "crowd",
+   "type": "symbol",
+   "source": "roads",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "crowd"
+   ],
+   "layout": {
+    "symbol-placement": "line",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "repeat",
+   "type": "symbol",
+   "source": "roads",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "repeat"
+   ],
+   "layout": {
+    "symbol-placement": "line",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "center",
+   "type": "symbol",
+   "source": "roads",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "center"
+   ],
+   "layout": {
+    "symbol-placement": "line-center",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  }
+ ]
+}

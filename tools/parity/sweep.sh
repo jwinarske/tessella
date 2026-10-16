@@ -127,6 +127,27 @@ bash "$P/parity.sh" stretch_p 52.52 13.405 14 1024 768 0 0
 # the stretch-only pair gives 114. Nothing else here draws `apply_text_fit` at all.
 bash "$P/parity.sh" textfit_p 52.52 13.405 14 1024 768 0 0
 
+# A label that follows a line, which until now nothing here held against the oracle at all: the
+# only `symbol-placement: line` in the tree is `quad_remote.json`, and the quad runs on one engine.
+# Nine shapes on a plain ground -- a straight run, one written backwards, an arc, a diagonal, a
+# corner sharper than `text-max-angle`, two names close enough to collide, a long run the spacing
+# repeats along, and a `line-center` run -- and the last of those is where the two differed. Every
+# other layer read zero the first time it was measured.
+#
+# Four cameras rather than one, because the mechanism is a per-frame reprojection: a bearing is
+# what turns a name upside down and makes `text-keep-upright` flip it, and a pitch is what bends
+# the walk. The second zoom is for the spacing, which is measured against the view's zoom.
+for args in "14 1024 768 0 0" "14 1024 768 60 0" "14 1024 768 0 200" "15 1024 768 0 0"; do
+  # shellcheck disable=SC2086 # five words by construction: zoom, width, height, pitch, bearing
+  bash "$P/parity.sh" linelabel_p 52.52 13.405 $args
+done
+
+# And a label on an *area*, which is a third rule again: not a vertex and not a midpoint but the
+# pole of inaccessibility, once per polygon. Five shapes -- an L, a ring with a hole, a pair, a
+# rectangle, and a star whose pole the search's queue order decides.
+bash "$P/parity.sh" arealabel_p 52.52 13.405 14 1024 768 0 0
+bash "$P/parity.sh" arealabel_p 52.52 13.405 14 1024 768 0 200
+
 # And the other three families' offsets, which no example style writes either. Not zero: the line
 # half leaves about 130 pixels along one tile edge, and the note in `paint_translate` says what is
 # known about that. Circle and fill-extrusion are exact, and the number is here so a change in it

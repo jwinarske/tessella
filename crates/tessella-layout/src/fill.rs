@@ -246,6 +246,28 @@ pub fn fixup_polygons(rings: &[Ring]) -> Vec<Ring> {
     out
 }
 
+/// [`signed_area`] over a ring held as floats, which is how a symbol layout carries one.
+///
+/// The same expression, and exact for the same reason: those floats are whole tile units, so
+/// every product and sum below is an integer a `f64` holds without rounding.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
+pub fn signed_area_of(ring: &[(f32, f32)]) -> i64 {
+    let len = ring.len();
+    if len < 3 {
+        return 0;
+    }
+    let mut sum = 0.0f64;
+    let mut j = len - 1;
+    for i in 0..len {
+        let p1 = ring[i];
+        let p2 = ring[j];
+        sum += (f64::from(p2.0) - f64::from(p1.0)) * (f64::from(p1.1) + f64::from(p2.1));
+        j = i;
+    }
+    sum as i64
+}
+
 /// Groups rings into polygons by winding.
 ///
 /// A polygon is an exterior ring followed by its holes. Degenerate rings — zero area — are
@@ -253,6 +275,16 @@ pub fn fixup_polygons(rings: &[Ring]) -> Vec<Ring> {
 /// decides what "exterior" means.
 #[must_use]
 pub fn classify_rings(rings: &[Ring]) -> Vec<Vec<Ring>> {
+    classify_rings_by(rings, |ring| signed_area(ring))
+}
+
+/// [`classify_rings`] over rings held in some other form, by whatever measures their area.
+///
+/// The grouping rule is the whole of `classifyRings` and belongs in one place; what a ring *is*
+/// differs by caller. A fill's are integer tile units; a symbol layout's are the same units held
+/// as floats, because its anchors are.
+#[must_use]
+pub fn classify_rings_by<R: Clone>(rings: &[R], area: impl Fn(&R) -> i64) -> Vec<Vec<R>> {
     // One ring cannot be a hole in anything, so no classification is needed and none is done.
     // mbgl short-circuits here too, and the difference is observable: it keeps a lone
     // zero-area ring that the loop below would drop.
@@ -260,13 +292,13 @@ pub fn classify_rings(rings: &[Ring]) -> Vec<Vec<Ring>> {
         return alloc::vec![rings.to_vec()];
     }
 
-    let mut polygons: Vec<Vec<Ring>> = Vec::new();
-    let mut polygon: Vec<Ring> = Vec::new();
+    let mut polygons: Vec<Vec<R>> = Vec::new();
+    let mut polygon: Vec<R> = Vec::new();
     // 0 until the first non-degenerate ring fixes it.
     let mut exterior_sign = 0i8;
 
     for ring in rings {
-        let area = signed_area(ring);
+        let area = area(ring);
         if area == 0 {
             continue;
         }

@@ -1256,6 +1256,20 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 seen.push(anchor.point);
             }
 
+            // And inside the tile, which is mbgl's `anchorInsideTile` in `addSymbolInstance`:
+            // "only add symbols anchored within this tile: neighboring symbols will be added as
+            // part of the neighboring tiles". An anchor in the buffer is the neighbor's to draw,
+            // and drawing it here as well puts a second copy of the label wherever the two tiles
+            // cut the line differently -- which `line-center` does at every tile a road crosses,
+            // because a buffered piece has a midpoint of its own. Half-open, as the point path's
+            // own test is, and after the repeat filter rather than before it: mbgl records every
+            // anchor it considered in `compareText` whether or not the instance is kept.
+            if !(0.0..crate::anchors::EXTENT).contains(&anchor.point.0)
+                || !(0.0..crate::anchors::EXTENT).contains(&anchor.point.1)
+            {
+                continue;
+            }
+
             let before = buffers.glyphs();
             for quad in &quads {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
