@@ -1,0 +1,247 @@
+{
+ "version": 8,
+ "name": "text-fit-parity",
+ "sprite": "http://127.0.0.1:8081/sprites/textFit",
+ "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
+ "sources": {
+  "shields": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "sos",
+       "name": "ABC"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3915,
+        52.5262
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "sos",
+       "name": "WIDER LABEL"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.5262
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "sos",
+       "name": "M"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4185,
+        52.5262
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "pro",
+       "name": "ABC"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3915,
+        52.52
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "pro",
+       "name": "WIDER LABEL"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.52
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "pro",
+       "name": "M"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4185,
+        52.52
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "mix",
+       "name": "ABC"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3915,
+        52.5138
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "mix",
+       "name": "WIDER LABEL"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.5138
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "mix",
+       "name": "M"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4185,
+        52.5138
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#f4f1ea"
+   }
+  },
+  {
+   "id": "sos",
+   "type": "symbol",
+   "source": "shields",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "sos"
+   ],
+   "layout": {
+    "icon-image": "textFit-wh-stretchOnly-stretchOnly",
+    "icon-text-fit": "both",
+    "icon-allow-overlap": true,
+    "icon-ignore-placement": true,
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "pro",
+   "type": "symbol",
+   "source": "shields",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "pro"
+   ],
+   "layout": {
+    "icon-image": "textFit-wh-proportional-proportional",
+    "icon-text-fit": "both",
+    "icon-allow-overlap": true,
+    "icon-ignore-placement": true,
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "mix",
+   "type": "symbol",
+   "source": "shields",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "mix"
+   ],
+   "layout": {
+    "icon-image": "textFit-wh-stretchOnly-proportional",
+    "icon-text-fit": "both",
+    "icon-allow-overlap": true,
+    "icon-ignore-placement": true,
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  }
+ ]
+}

@@ -62,6 +62,19 @@ pub struct Quad {
     /// rectangle is only meaningful against the atlas it was packed into, and a drawable binds
     /// one texture.
     pub section: u16,
+    /// The part of the corner offset that does *not* scale with the symbol, in logical pixels,
+    /// as the top-left corner's pair and then the bottom-right corner's.
+    ///
+    /// mbgl's `pixelOffsetTL` and `pixelOffsetBR`. Zero for every quad but a cell of a
+    /// stretched icon's grid, which is what the pair is for: the picture's fixed parts must keep
+    /// their own size while the stretched band grows with the label, so a cell's corner is an em
+    /// term plus a pixel term and the shader adds them separately.
+    pub pixel_offset: ((f32, f32), (f32, f32)),
+    /// The floor the shader raises this quad's font scale to.
+    ///
+    /// mbgl's `minFontScale`. Zero outside a stretched icon's grid. It is what stops a shield
+    /// shrinking below the size its fixed parts already occupy.
+    pub min_font_scale: (f32, f32),
 }
 
 /// What a label's quads are built against.
@@ -242,6 +255,9 @@ where
                 glyph_offset,
                 sdf,
                 section: glyph.section,
+                // A glyph's corners are all em: nothing in a label is held at a fixed pixel size.
+                pixel_offset: ((0.0, 0.0), (0.0, 0.0)),
+                min_font_scale: (0.0, 0.0),
             };
 
             if rotate_vertical {
@@ -297,14 +313,6 @@ where
 
     quads
 }
-
-/// The one-pixel pad an icon quad carries on every side.
-///
-/// mbgl's comment says it plainly: a ten-pixel icon that is not perfectly aligned to the pixel
-/// grid covers eleven actual pixels, so a quad sized to the icon clips a sliver off one edge.
-/// The pad is on the *quad* and not on the texture rectangle — the extra pixel samples the
-/// atlas padding, which is why the atlas reserves it.
-pub const ICON_QUAD_BORDER: f32 = 1.0;
 
 /// The padding the icon atlas reserves around each sprite, in texture pixels.
 ///
@@ -484,39 +492,311 @@ pub fn apply_text_fit(
     out
 }
 
-/// The quad an icon draws as.
+/// One edge of a cell of a stretched icon's grid, split into its two terms.
 ///
-/// mbgl's `getIconQuad`. `rotate` is `icon-rotate` in radians, applied about the anchor the way
-/// a glyph's is — which is why it rotates the corners rather than the box: the atlas rectangle
-/// does not turn with the icon.
-#[must_use]
-pub fn icon_quad(icon: PositionedIcon, tex: Rect, radians: f32) -> Quad {
-    let left = icon.left - ICON_QUAD_BORDER;
-    let top = icon.top - ICON_QUAD_BORDER;
-    let right = icon.right + ICON_QUAD_BORDER;
-    let bottom = icon.bottom + ICON_QUAD_BORDER;
+/// mbgl's `Cut`. `stretch` is the distance along the picture measured in the columns that may
+/// stretch, `fixed` the distance measured in the ones that may not — and keeping them apart is
+/// the whole mechanism: the first scales with the label and the second does not.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Cut {
+    fixed: f32,
+    stretch: f32,
+}
 
-    let mut quad = Quad {
-        tl: (left, top),
-        tr: (right, top),
-        bl: (left, bottom),
-        br: (right, bottom),
-        tex,
-        glyph_offset: (0.0, 0.0),
-        // An icon layer's drawable is bound to one shader or the other by the sprite's own
-        // flag, so its quads do not each need to carry one. The field is here because the type
-        // is shared with a label's, where a quad *is* what decides.
-        sdf: false,
-        // An icon is not a text section, and the label's own face answers for it.
-        section: 0,
+/// How much of `zones` lies between `min` and `max` — mbgl's `sumWithinRange`.
+///
+/// Each end is held inside the window before it is measured, so a zone that straddles an edge
+/// contributes only the part inside and one entirely outside contributes nothing.
+///
+/// Written as mbgl writes it rather than as a `clamp`, which panics when a window is inverted.
+/// Nothing validates that a sprite index's `content` reads left-to-right, so an entry spelling
+/// it the other way round has to come out as zero rather than as an abort.
+fn sum_within_range(zones: &[(f32, f32)], min: f32, max: f32) -> f32 {
+    let held = |value: f32| value.min(max).max(min);
+    zones.iter().map(|&(from, to)| held(to) - held(from)).sum()
+}
+
+/// The cuts one axis of a stretchable picture is divided at — mbgl's `stretchZonesToCuts`.
+///
+/// Two cuts per zone, at the same point: one closing the fixed run before it and one opening the
+/// stretchable run. That is what makes the grid's cells alternate fixed, stretched, fixed, and
+/// why a picture with two zones along an axis is cut into five parts rather than three.
+///
+/// The first and last cut reach a pixel outside the picture, which is the border every icon quad
+/// carries so that a sample at the edge lands on the atlas padding rather than on a neighbor.
+fn stretch_zones_to_cuts(zones: &[(f32, f32)], fixed_size: f32, stretch_size: f32) -> Vec<Cut> {
+    let border = SPRITE_PADDING as f32;
+    let mut cuts = Vec::with_capacity(2 * zones.len() + 2);
+    cuts.push(Cut {
+        fixed: -border,
+        stretch: 0.0,
+    });
+    for &(from, to) in zones {
+        let last = cuts[cuts.len() - 1].stretch;
+        cuts.push(Cut {
+            fixed: from - last,
+            stretch: last,
+        });
+        cuts.push(Cut {
+            fixed: from - last,
+            stretch: last + (to - from),
+        });
+    }
+    cuts.push(Cut {
+        fixed: fixed_size + border,
+        stretch: stretch_size,
+    });
+    cuts
+}
+
+/// The quads an icon draws as — mbgl's `getIconQuads`.
+///
+/// One quad for a plain icon, and a grid of them for a stretchable one under `icon-text-fit`.
+///
+/// # Why a shield is more than one quad
+///
+/// A sprite may name the columns and rows of itself that are allowed to stretch. Drawing it as a
+/// single quad scaled to the label stretches its rounded ends and its border along with the
+/// middle, which is what a route shield must not do. So the picture is cut along those zones and
+/// each cell is drawn as its own quad: a cell in a fixed column keeps its pixel width whatever
+/// the label does, and only the cells in a stretchable one grow.
+///
+/// A cell's corner is therefore two terms rather than one — a distance in em that scales with
+/// the symbol, and a distance in pixels that does not. [`Quad::pixel_offset`] carries the
+/// second, and the shader adds them after scaling the first.
+///
+/// `has_text_fit` is the layer's `icon-text-fit`, not whether a label was found: mbgl asks the
+/// layer, and an icon told to fit text it does not have still takes this path.
+///
+/// `radians` is `icon-rotate`, applied about the anchor the way a glyph's is — which is why it
+/// rotates the corners rather than the box: the atlas rectangle does not turn with the icon.
+#[must_use]
+pub fn icon_quads(
+    icon: PositionedIcon,
+    position: &crate::sprite::IconPosition,
+    radians: f32,
+    has_text_fit: bool,
+) -> Vec<Quad> {
+    let border = SPRITE_PADDING as f32;
+    #[allow(clippy::cast_possible_truncation)]
+    let pixel_ratio = position.pixel_ratio as f32;
+    #[allow(clippy::cast_precision_loss)]
+    let image_width = position.padded_rect.width as f32 - 2.0 * border;
+    #[allow(clippy::cast_precision_loss)]
+    let image_height = position.padded_rect.height as f32 - 2.0 * border;
+
+    // A picture that names no zones is treated as one zone covering all of it, which is what
+    // makes the single-quad branch below fall out of the same arithmetic rather than needing
+    // its own.
+    #[allow(clippy::cast_possible_truncation)]
+    let zones = |named: &[crate::sprite::Stretch], whole: f32| -> Vec<(f32, f32)> {
+        if named.is_empty() {
+            vec![(0.0, whole)]
+        } else {
+            named.iter().map(|s| (s.from as f32, s.to as f32)).collect()
+        }
+    };
+    let stretch_x = zones(&position.stretch_x, image_width);
+    let stretch_y = zones(&position.stretch_y, image_height);
+
+    let stretch_width: f32 = stretch_x.iter().map(|&(from, to)| to - from).sum();
+    let stretch_height: f32 = stretch_y.iter().map(|&(from, to)| to - from).sum();
+    let fixed_width = image_width - stretch_width;
+    let fixed_height = image_height - stretch_height;
+
+    let mut stretch_offset_x = 0.0;
+    let mut stretch_content_width = stretch_width;
+    let mut stretch_offset_y = 0.0;
+    let mut stretch_content_height = stretch_height;
+    let mut fixed_offset_x = 0.0;
+    let mut fixed_content_width = fixed_width;
+    let mut fixed_offset_y = 0.0;
+    let mut fixed_content_height = fixed_height;
+
+    // Fitting measures the *content* box, so the grid's arithmetic has to be relative to it
+    // rather than to the whole picture: a shield's label grows the columns inside the content
+    // area, and the border outside it is carried along unchanged.
+    if has_text_fit && let Some(content) = position.content {
+        #[allow(clippy::cast_possible_truncation)]
+        let (left, top, right, bottom) = (
+            content.left as f32,
+            content.top as f32,
+            content.right as f32,
+            content.bottom as f32,
+        );
+        stretch_offset_x = sum_within_range(&stretch_x, 0.0, left);
+        stretch_offset_y = sum_within_range(&stretch_y, 0.0, top);
+        stretch_content_width = sum_within_range(&stretch_x, left, right);
+        stretch_content_height = sum_within_range(&stretch_y, top, bottom);
+        fixed_offset_x = left - stretch_offset_x;
+        fixed_offset_y = top - stretch_offset_y;
+        fixed_content_width = (right - left) - stretch_content_width;
+        fixed_content_height = (bottom - top) - stretch_content_height;
+    }
+
+    let icon_left = icon.left;
+    let icon_top = icon.top;
+    let icon_width = icon.right - icon_left;
+    let icon_height = icon.bottom - icon_top;
+    let turn = (radians != 0.0).then(|| radians.sin_cos());
+
+    let mut quads = Vec::new();
+    let mut make_box = |left: Cut, top: Cut, right: Cut, bottom: Cut| {
+        let em = |stretch: f32, offset: f32, content: f32, size: f32, start: f32| {
+            start + size * (stretch - offset) / content
+        };
+        let px = |fixed: f32, offset: f32, content: f32, stretch: f32, size: f32| {
+            (fixed - offset) - content * stretch / size
+        };
+
+        let left_em = em(
+            left.stretch,
+            stretch_offset_x,
+            stretch_content_width,
+            icon_width,
+            icon_left,
+        );
+        let right_em = em(
+            right.stretch,
+            stretch_offset_x,
+            stretch_content_width,
+            icon_width,
+            icon_left,
+        );
+        let top_em = em(
+            top.stretch,
+            stretch_offset_y,
+            stretch_content_height,
+            icon_height,
+            icon_top,
+        );
+        let bottom_em = em(
+            bottom.stretch,
+            stretch_offset_y,
+            stretch_content_height,
+            icon_height,
+            icon_top,
+        );
+
+        let left_px = px(
+            left.fixed,
+            fixed_offset_x,
+            fixed_content_width,
+            left.stretch,
+            stretch_width,
+        );
+        let right_px = px(
+            right.fixed,
+            fixed_offset_x,
+            fixed_content_width,
+            right.stretch,
+            stretch_width,
+        );
+        let top_px = px(
+            top.fixed,
+            fixed_offset_y,
+            fixed_content_height,
+            top.stretch,
+            stretch_height,
+        );
+        let bottom_px = px(
+            bottom.fixed,
+            fixed_offset_y,
+            fixed_content_height,
+            bottom.stretch,
+            stretch_height,
+        );
+
+        let mut corners = [
+            (left_em, top_em),
+            (right_em, top_em),
+            (left_em, bottom_em),
+            (right_em, bottom_em),
+        ];
+        if let Some((sin, cos)) = turn {
+            for corner in &mut corners {
+                *corner = rotate(*corner, sin, cos);
+            }
+        }
+
+        // The cell's rectangle in the atlas, measured from the same two terms: a cut's distance
+        // along the picture is its stretched part plus its fixed part, whatever the label did.
+        let x1 = left.stretch + left.fixed;
+        let x2 = right.stretch + right.fixed;
+        let y1 = top.stretch + top.fixed;
+        let y2 = bottom.stretch + bottom.fixed;
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let tex = Rect {
+            x: (position.padded_rect.x as f32 + border + x1) as u32,
+            y: (position.padded_rect.y as f32 + border + y1) as u32,
+            width: (x2 - x1) as u32,
+            height: (y2 - y1) as u32,
+        };
+
+        quads.push(Quad {
+            tl: corners[0],
+            tr: corners[1],
+            bl: corners[2],
+            br: corners[3],
+            tex,
+            glyph_offset: (0.0, 0.0),
+            // An icon layer's drawable is bound to one shader or the other by the sprite's own
+            // flag, so its quads do not each need to carry one. The field is here because the
+            // type is shared with a label's, where a quad *is* what decides.
+            sdf: false,
+            // An icon is not a text section, and the label's own face answers for it.
+            section: 0,
+            pixel_offset: (
+                (left_px / pixel_ratio, top_px / pixel_ratio),
+                (right_px / pixel_ratio, bottom_px / pixel_ratio),
+            ),
+            min_font_scale: (
+                fixed_content_width / pixel_ratio / icon_width,
+                fixed_content_height / pixel_ratio / icon_height,
+            ),
+        });
     };
 
-    if radians != 0.0 {
-        let (sin, cos) = radians.sin_cos();
-        quad.tl = rotate(quad.tl, sin, cos);
-        quad.tr = rotate(quad.tr, sin, cos);
-        quad.bl = rotate(quad.bl, sin, cos);
-        quad.br = rotate(quad.br, sin, cos);
+    if !has_text_fit || (position.stretch_x.is_empty() && position.stretch_y.is_empty()) {
+        // One quad over the whole picture, a texture pixel proud of it on every side. mbgl's
+        // comment says why: a ten-pixel icon that is not aligned to the pixel grid covers eleven
+        // actual pixels, so a quad sized to the icon clips a sliver off one edge, and the extra
+        // pixel samples the atlas padding the packer reserved for it.
+        //
+        // It is written as a cut rather than added to the corners because the pad is a *texture*
+        // pixel: the arithmetic below carries it through the icon-to-image ratio, so an icon
+        // drawn from a retina sprite pads by half a logical pixel rather than a whole one.
+        make_box(
+            Cut {
+                fixed: 0.0,
+                stretch: -1.0,
+            },
+            Cut {
+                fixed: 0.0,
+                stretch: -1.0,
+            },
+            Cut {
+                fixed: 0.0,
+                stretch: image_width + 1.0,
+            },
+            Cut {
+                fixed: 0.0,
+                stretch: image_height + 1.0,
+            },
+        );
+    } else {
+        let x_cuts = stretch_zones_to_cuts(&stretch_x, fixed_width, stretch_width);
+        let y_cuts = stretch_zones_to_cuts(&stretch_y, fixed_height, stretch_height);
+        for xi in 0..x_cuts.len() - 1 {
+            for yi in 0..y_cuts.len() - 1 {
+                make_box(x_cuts[xi], y_cuts[yi], x_cuts[xi + 1], y_cuts[yi + 1]);
+            }
+        }
     }
-    quad
+
+    quads
 }

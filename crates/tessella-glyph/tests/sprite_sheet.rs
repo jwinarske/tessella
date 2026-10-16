@@ -520,6 +520,30 @@ mod atlas {
         );
     }
 
+    /// A stretchable icon keeps its zones through the packing.
+    ///
+    /// They are what the quad builder cuts a shield along, and they are read from the index
+    /// rather than from the picture, so packing is the one place they can be lost. An
+    /// `IconPosition` without them is a shield drawn as one stretched picture — which is what
+    /// layout sees, so nothing nearer the pixels can notice.
+    #[test]
+    fn the_stretch_zones_survive_packing() {
+        let sheet = decode_sheet(&encode(8, 8, 6, &[255u8; 8 * 8 * 4])).expect("decodes");
+        let index = tessella_glyph::sprite::parse(
+            br#"{"icon": {"x": 0, "y": 0, "width": 8, "height": 8,
+                          "stretchX": [[2, 6]], "stretchY": [[3, 5]],
+                          "content": [2, 3, 6, 5]}}"#,
+            Some(sheet.size()),
+        )
+        .expect("parses");
+
+        let mut atlas = IconAtlas::new(64, 64);
+        let placed = atlas.add(&sheet, &index["icon"]).expect("it fits");
+        assert_eq!(placed.stretch_x, index["icon"].stretch_x);
+        assert_eq!(placed.stretch_y, index["icon"].stretch_y);
+        assert!(!placed.stretch_x.is_empty(), "the index named one");
+    }
+
     /// The store packs on load, so every icon in the index has a position.
     #[test]
     fn loading_packs_every_icon() {

@@ -113,6 +113,20 @@ done
 # on purpose -- a swapped axis or a flipped sign shows, where [4, 4] would not.
 bash "$P/parity.sh" symbol_translate_p 52.52 13.405 16 1024 768 0 0
 
+# A stretchable shield, which no other scene here has and no example fixture either: every
+# sprite in `tests/sprite-fixtures` but this one names no `stretchX`, so the branch that cuts a
+# picture into its grid had never been drawn. Three sprites and nine shields -- nine cells,
+# fifteen cells, and a width-only fit -- from maplibre-native's own `sprites/stretch` pair.
+#
+# Zero, and it reads zero only because two things are right at once: the grid, and the font scale
+# the label is measured at. Either alone leaves the shield somewhere else entirely.
+bash "$P/parity.sh" stretch_p 52.52 13.405 14 1024 768 0 0
+# And the sprite's own limits on that stretch, which are a separate mechanism: the layer says
+# which axes to fit and the sprite says how far the fit may distort it. Three of `textFit`'s nine
+# combinations, and the proportional one bites -- its wide shield comes out 98 pixels across where
+# the stretch-only pair gives 114. Nothing else here draws `apply_text_fit` at all.
+bash "$P/parity.sh" textfit_p 52.52 13.405 14 1024 768 0 0
+
 # And the other three families' offsets, which no example style writes either. Not zero: the line
 # half leaves about 130 pixels along one tile edge, and the note in `paint_translate` says what is
 # known about that. Circle and fill-extrusion are exact, and the number is here so a change in it

@@ -115,6 +115,10 @@ fn icon_options(
         // Top, right, bottom, left, as the spec writes it — the CSS order, not the extent order
         // everything else here uses. Reading it as the other rotates the padding a quarter turn.
         text_fit_padding: quad("icon-text-fit-padding").unwrap_or([0.0; 4]),
+        // The label's size, not the icon's: `icon-text-fit` measures the text, and the shaped
+        // extent it measures is in em. mbgl's `fontScale`, read off the same layer and feature
+        // the label itself is read off.
+        text_font_scale: number("text-size").unwrap_or(16.0) / ONE_EM,
         offset: pair("icon-offset").unwrap_or([0.0, 0.0]),
         // On the wire in degrees, like `text-rotate`.
         rotate: number("icon-rotate").unwrap_or(0.0).to_radians(),

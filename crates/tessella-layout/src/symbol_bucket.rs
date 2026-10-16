@@ -321,6 +321,38 @@ impl SymbolBuffers {
         is_sdf: bool,
         opacity: f32,
     ) {
+        self.add_quad_with(
+            anchor,
+            corners,
+            glyph_offset,
+            tex,
+            size,
+            is_sdf,
+            opacity,
+            ((0.0, 0.0), (0.0, 0.0)),
+            (0.0, 0.0),
+        );
+    }
+
+    /// The same, for a quad whose corners carry a fixed pixel term as well as an em one.
+    ///
+    /// Only a cell of a stretched icon's grid does. `pixel_offset` is the top-left corner's pair
+    /// and then the bottom-right corner's, and each vertex takes the half of each that belongs
+    /// to its own corner — which is mbgl's pairing, and the reason the two are carried rather
+    /// than one offset per quad: the quad's two axes stretch independently.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_quad_with(
+        &mut self,
+        anchor: (f32, f32),
+        corners: [(f32, f32); 4],
+        glyph_offset: (f32, f32),
+        tex: (u16, u16, u16, u16),
+        size: SizeRange,
+        is_sdf: bool,
+        opacity: f32,
+        pixel_offset: ((f32, f32), (f32, f32)),
+        min_font_scale: (f32, f32),
+    ) {
         let glyph_offset_y = glyph_offset.1;
         let index = self.vertices.len();
         assert!(
@@ -339,7 +371,11 @@ impl SymbolBuffers {
             (x + width, y + height),
         ];
 
-        for (corner, texel) in corners.into_iter().zip(texels) {
+        let ((left, top), (right, bottom)) = pixel_offset;
+        // In the order the corners are: top-left, top-right, bottom-left, bottom-right.
+        let offsets = [(left, top), (right, top), (left, bottom), (right, bottom)];
+
+        for ((corner, texel), offset) in corners.into_iter().zip(texels).zip(offsets) {
             self.vertices.push(layout_vertex(
                 anchor,
                 corner,
@@ -347,8 +383,8 @@ impl SymbolBuffers {
                 texel,
                 size,
                 is_sdf,
-                (0.0, 0.0),
-                (0.0, 0.0),
+                offset,
+                min_font_scale,
             ));
             self.dynamic.push(dynamic_vertex(anchor, 0.0));
             self.opacity.push(opacity_vertex(true, opacity));
@@ -1327,6 +1363,14 @@ pub struct IconOptions {
     /// `icon-text-fit-padding`, in logical pixels, ordered top, right, bottom, left as the spec
     /// writes it.
     pub text_fit_padding: [f32; 4],
+    /// What the label's shaped extent is multiplied by to reach logical pixels.
+    ///
+    /// mbgl's `fontScale`: `text-size` over [`tessella_glyph::text::ONE_EM`], because shaping is
+    /// done once at the em and scaled per feature. `icon-text-fit` is the only thing here that
+    /// measures a label, so it is the only thing that needs it — and a shield fitted without it
+    /// comes out in em rather than in pixels, which at the spec's default `text-size` of sixteen
+    /// is half again too wide.
+    pub text_font_scale: f32,
 }
 
 impl Default for IconOptions {
@@ -1342,6 +1386,9 @@ impl Default for IconOptions {
             anchor: tessella_glyph::shaping::Anchor::Center,
             text_fit: tessella_glyph::quads::IconTextFit::None,
             text_fit_padding: [0.0; 4],
+            // The spec's default `text-size` of sixteen over the em, which is what a layer that
+            // names no size shapes at.
+            text_font_scale: 16.0 / tessella_glyph::text::ONE_EM,
         }
     }
 }
@@ -1366,7 +1413,7 @@ pub fn build_icons(
     labels: &[IconLabel],
     positions: &tessella_glyph::sprite::Positions,
 ) -> (SymbolBuffers, Vec<LaidOut>) {
-    use tessella_glyph::quads::{icon_quad, shape_icon};
+    use tessella_glyph::quads::{icon_quads, shape_icon};
 
     let mut buffers = SymbolBuffers::default();
     let mut out = Vec::with_capacity(labels.len());
@@ -1397,7 +1444,7 @@ pub fn build_icons(
                 label.options.text_fit,
                 (top, bottom, left, right),
                 label.options.offset,
-                1.0,
+                label.options.text_font_scale,
             );
             if let Some(content) = position.content {
                 #[allow(clippy::cast_possible_truncation)]
@@ -1415,29 +1462,36 @@ pub fn build_icons(
                 );
             }
         }
-        // The *padded* rectangle, which is a pixel larger than the icon on every side and is
-        // exactly what the quad's border covers.
-        let quad = icon_quad(placed, position.padded_rect, label.options.rotate);
+        // One quad for a plain icon, and a grid of them for a stretchable one the layer asked to
+        // fit its text. The layer is what decides, not whether a label was found: mbgl asks
+        // `icon-text-fit` alone, and an icon told to fit text it does not have still takes the
+        // stretched path and comes out the size its own fixed parts make it.
+        let has_text_fit = label.options.text_fit != tessella_glyph::quads::IconTextFit::None;
+        let quads = icon_quads(placed, position, label.options.rotate, has_text_fit);
 
         let before = buffers.glyphs();
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        buffers.add_quad(
-            label.anchor,
-            [quad.tl, quad.tr, quad.bl, quad.br],
-            quad.glyph_offset,
-            (
-                quad.tex.x as u16,
-                quad.tex.y as u16,
-                quad.tex.width as u16,
-                quad.tex.height as u16,
-            ),
-            label.options.vertex_size,
-            // The sprite decides, not the layer. A shield drawn as a distance field is
-            // recolorable by `icon-color`; a photographic icon is not, and putting a plain
-            // image through the SDF shader draws its alpha as a coverage ramp.
-            position.sdf,
-            1.0,
-        );
+        for quad in quads {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            buffers.add_quad_with(
+                label.anchor,
+                [quad.tl, quad.tr, quad.bl, quad.br],
+                quad.glyph_offset,
+                (
+                    quad.tex.x as u16,
+                    quad.tex.y as u16,
+                    quad.tex.width as u16,
+                    quad.tex.height as u16,
+                ),
+                label.options.vertex_size,
+                // The sprite decides, not the layer. A shield drawn as a distance field is
+                // recolorable by `icon-color`; a photographic icon is not, and putting a plain
+                // image through the SDF shader draws its alpha as a coverage ramp.
+                position.sdf,
+                1.0,
+                quad.pixel_offset,
+                quad.min_font_scale,
+            );
+        }
 
         // The *box*, not the quad: collision measures what the icon occupies and the quad is a
         // pixel larger on every side for sampling.

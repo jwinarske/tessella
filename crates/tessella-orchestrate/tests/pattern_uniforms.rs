@@ -129,6 +129,8 @@ mod rects {
             pixel_ratio: 1.0,
             sdf: false,
             content: None,
+            stretch_x: Vec::new(),
+            stretch_y: Vec::new(),
             text_fit_width: None,
             text_fit_height: None,
         }

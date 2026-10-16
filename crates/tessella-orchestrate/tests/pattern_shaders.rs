@@ -192,6 +192,8 @@ fn atlas() -> BTreeMap<String, IconPosition> {
             },
             pixel_ratio: 1.0,
             sdf: false,
+            stretch_x: Vec::new(),
+            stretch_y: Vec::new(),
             content: None,
             text_fit_width: None,
             text_fit_height: None,
@@ -399,7 +401,7 @@ fn an_unresolved_pattern_draws_nothing() {
 fn a_missing_sprite_draws_nothing() {
     let mut positions = atlas();
     positions.remove("sand_noise");
-    positions.insert("something_else".to_owned(), atlas()["sand_noise"]);
+    positions.insert("something_else".to_owned(), atlas()["sand_noise"].clone());
     let pixels = vec![0u8; 512 * 512 * 4];
     let patterns = Patterns {
         revision: 0,
