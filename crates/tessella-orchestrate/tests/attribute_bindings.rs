@@ -74,6 +74,8 @@ fn atlas() -> BTreeMap<String, IconPosition> {
             },
             pixel_ratio: 1.0,
             sdf: false,
+            stretch_x: Vec::new(),
+            stretch_y: Vec::new(),
             content: None,
             text_fit_width: None,
             text_fit_height: None,

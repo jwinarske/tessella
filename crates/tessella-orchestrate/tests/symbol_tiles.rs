@@ -119,6 +119,8 @@ fn positions(icons: &[(&str, bool)]) -> tessella_glyph::sprite::Positions {
                 },
                 pixel_ratio: 1.0,
                 sdf: *sdf,
+                stretch_x: Vec::new(),
+                stretch_y: Vec::new(),
                 content: None,
                 text_fit_width: None,
                 text_fit_height: None,
@@ -846,6 +848,8 @@ fn a_shield_stretches_around_its_number() {
             },
             pixel_ratio: 1.0,
             sdf: true,
+            stretch_x: Vec::new(),
+            stretch_y: Vec::new(),
             content: Some(tessella_glyph::sprite::Content {
                 left: 4.0,
                 top: 4.0,
@@ -901,6 +905,181 @@ fn a_shield_stretches_around_its_number() {
     }
 }
 
+/// A fitted shield is measured in pixels, so `text-size` changes how wide it comes out.
+///
+/// Shaping happens once at the em and the extent it produces is in twenty-fourths of the drawn
+/// size, so fitting an icon to it has to scale by `text-size / 24` first — mbgl's `fontScale`.
+/// Passing one instead leaves the shield in em: right at `text-size` 24 and half again too wide
+/// at the spec's default of sixteen, which is a shield that does not touch its own label.
+///
+/// Asked as a ratio rather than against a number, because the label's width in em depends on the
+/// test font's metrics and the shield's does not have to.
+#[test]
+fn a_fitted_shield_scales_with_the_text_size() {
+    let shield = |size: u32| {
+        let style: Style = serde_json::from_str(&format!(
+            r#"{{"version": 8, "sources": {{"v": {{"type": "vector", "tiles": []}}}},
+                "layers": [{{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                            "layout": {{"text-field": "{{type}}", "text-font": ["TestFont"],
+                                       "text-size": {size},
+                                       "icon-image": "shield", "icon-text-fit": "both"}}}}]}}"#
+        ))
+        .expect("a style");
+
+        let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+        let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+        let sprites: tessella_glyph::sprite::Positions = [(
+            "shield".to_string(),
+            tessella_glyph::sprite::IconPosition {
+                padded_rect: tessella_glyph::atlas::Rect {
+                    x: 1,
+                    y: 1,
+                    width: 42,
+                    height: 22,
+                },
+                pixel_ratio: 1.0,
+                sdf: true,
+                stretch_x: Vec::new(),
+                stretch_y: Vec::new(),
+                content: None,
+                text_fit_width: None,
+                text_fit_height: None,
+            },
+        )]
+        .into_iter()
+        .collect();
+
+        let (fonts, _) = fonts_for(layout);
+        let (_, text) = layout.lay_out(&fonts, None);
+        let (_, laid) = layout.lay_out_icons(&sprites, &text);
+        assert!(!laid.is_empty(), "no shields were drawn at size {size}");
+        laid[0].extent.3 - laid[0].extent.2
+    };
+
+    let small = shield(12);
+    let large = shield(24);
+    assert!(
+        (large - small * 2.0).abs() < 0.001,
+        "a shield at twice the text size is not twice as wide: {small} and {large}"
+    );
+}
+
+/// A stretchable sprite reaches the quad builder, and is drawn as its grid.
+///
+/// The zones are read out of the sprite index and have to survive packing to be of any use:
+/// `IconPosition` is what layout sees, and a version of it that dropped them left the builder
+/// with nothing to cut along. One symbol, nine quads, which is thirty-six vertices.
+#[test]
+fn a_stretchable_shield_is_drawn_as_nine_quads() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                        "layout": {"text-field": "{type}", "text-font": ["TestFont"],
+                                   "icon-image": "shield", "icon-text-fit": "both"}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+
+    let position = |stretched: bool| tessella_glyph::sprite::IconPosition {
+        padded_rect: tessella_glyph::atlas::Rect {
+            x: 1,
+            y: 1,
+            width: 42,
+            height: 22,
+        },
+        pixel_ratio: 1.0,
+        sdf: true,
+        stretch_x: if stretched {
+            alloc_zone(10.0, 30.0)
+        } else {
+            Vec::new()
+        },
+        stretch_y: if stretched {
+            alloc_zone(5.0, 15.0)
+        } else {
+            Vec::new()
+        },
+        content: None,
+        text_fit_width: None,
+        text_fit_height: None,
+    };
+
+    let quads = |stretched: bool| {
+        let sprites: tessella_glyph::sprite::Positions =
+            [("shield".to_string(), position(stretched))]
+                .into_iter()
+                .collect();
+        let (fonts, _) = fonts_for(layout);
+        let (_, text) = layout.lay_out(&fonts, None);
+        let (icons, laid) = layout.lay_out_icons(&sprites, &text);
+        assert!(!laid.is_empty(), "no shields were drawn");
+        (icons.vertices.len() / laid.len(), laid[0].glyphs)
+    };
+
+    assert_eq!(quads(false), (4, 1), "a plain shield is one quad");
+    assert_eq!(quads(true), (36, 9), "a stretchable one is nine");
+}
+
+/// A stretched cell carries its fixed part in the pixel offset attribute.
+///
+/// The attribute has been on the wire since the symbol vertex was written and has only ever
+/// held zero. A grid whose cells all carried zero would draw as one stretched picture again,
+/// which is the defect rather than a smaller version of it.
+#[test]
+fn a_stretched_cell_carries_a_pixel_offset() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                        "layout": {"text-field": "{type}", "text-font": ["TestFont"],
+                                   "icon-image": "shield", "icon-text-fit": "both"}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+
+    let sprites: tessella_glyph::sprite::Positions = [(
+        "shield".to_string(),
+        tessella_glyph::sprite::IconPosition {
+            padded_rect: tessella_glyph::atlas::Rect {
+                x: 1,
+                y: 1,
+                width: 42,
+                height: 22,
+            },
+            pixel_ratio: 1.0,
+            sdf: true,
+            stretch_x: alloc_zone(10.0, 30.0),
+            stretch_y: alloc_zone(5.0, 15.0),
+            content: None,
+            text_fit_width: None,
+            text_fit_height: None,
+        },
+    )]
+    .into_iter()
+    .collect();
+
+    let (fonts, _) = fonts_for(layout);
+    let (_, text) = layout.lay_out(&fonts, None);
+    let (icons, laid) = layout.lay_out_icons(&sprites, &text);
+    assert!(!laid.is_empty(), "no shields were drawn");
+
+    assert!(
+        icons
+            .vertices
+            .iter()
+            .any(|vertex| vertex.pixel_offset[0] != 0 || vertex.pixel_offset[1] != 0),
+        "every cell of the grid carries a zero pixel offset"
+    );
+}
+
+/// One stretchable zone, as the sprite index spells it.
+fn alloc_zone(from: f64, to: f64) -> Vec<tessella_glyph::sprite::Stretch> {
+    vec![tessella_glyph::sprite::Stretch { from, to }]
+}
+
 /// An icon with no label is not stretched, and reserves no border twice.
 ///
 /// `icon-text-fit` on a feature with no text has nothing to stretch to. The icon keeps its own
@@ -929,6 +1108,8 @@ fn an_icon_with_no_label_is_not_stretched() {
             },
             pixel_ratio: 1.0,
             sdf: true,
+            stretch_x: Vec::new(),
+            stretch_y: Vec::new(),
             content: Some(tessella_glyph::sprite::Content {
                 left: 4.0,
                 top: 4.0,

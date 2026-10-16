@@ -120,7 +120,7 @@ pub type Index = BTreeMap<String, Sprite>;
 /// what the icon quad's one-pixel border samples. Handing out the sheet rectangle instead makes
 /// that border sample the neighboring icon, which draws a hairline of the wrong picture around
 /// every marker on the map.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IconPosition {
     /// Its rectangle in the atlas, including a pixel of padding on every side.
     pub padded_rect: crate::atlas::Rect,
@@ -130,6 +130,15 @@ pub struct IconPosition {
     pub sdf: bool,
     /// The box text is laid into, in the sprite's own pixels.
     pub content: Option<Content>,
+    /// Columns of the picture that may stretch, in the sprite's own pixels.
+    ///
+    /// Carried through from [`Sprite::stretch_x`] rather than dropped at packing, because the
+    /// quad builder cuts the picture along these: under `icon-text-fit` a sprite that names them
+    /// is drawn as a grid of quads whose fixed parts keep their pixel size. Empty for a sprite
+    /// that names none, which is one quad over the whole rectangle.
+    pub stretch_x: Vec<Stretch>,
+    /// Rows that may stretch.
+    pub stretch_y: Vec<Stretch>,
     /// How the icon may stretch horizontally around that text.
     pub text_fit_width: Option<TextFit>,
     /// And vertically.
@@ -904,6 +913,8 @@ impl IconAtlas {
             pixel_ratio: sprite.pixel_ratio,
             sdf: sprite.sdf,
             content: sprite.content,
+            stretch_x: sprite.stretch_x.clone(),
+            stretch_y: sprite.stretch_y.clone(),
             text_fit_width: sprite.text_fit_width,
             text_fit_height: sprite.text_fit_height,
         })

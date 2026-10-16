@@ -274,6 +274,41 @@ that.
   `sand_noise` the broken drawable block read 0 as well. Pitched it reads 4 and 3, which is the
   antialiasing floor of a pattern whose every copy has an edge.
 
+- `stretch_p` — nine shields on a plain ground, from maplibre-native's own `sprites/stretch`
+  pair. A sprite may name the columns and rows of itself that may stretch, and under
+  `icon-text-fit` the picture is drawn as a *grid* of quads rather than one, so a shield's
+  rounded ends keep their pixel size while the band between them grows with the label. Three
+  sprites: `nine-part-content` at pixel ratio 2 with a content box, `fifteen-part` whose two
+  stretchable columns make a five-by-three grid, and `three-part` fitted on width alone.
+
+  No other scene here has a stretchable sprite and no example fixture has one either — every
+  entry of `emerald`, which was the whole of `tests/sprite-fixtures`, names no `stretchX`. So
+  this is the scene that found tessella#405 and tessella#406, and the argument for it is the one
+  the examples section makes: a defect nothing draws is a defect nothing measures.
+
+      stretch_p  z14 p0   12,769 of 786,432   drawn as one stretched picture
+                          15,326              sliced, and measured in em
+                               0              sliced, and measured in pixels
+
+  The middle row is the useful one. Slicing the picture correctly made the number *worse*,
+  because the second defect put the shield's box half again too wide and every cell of a correct
+  grid then landed somewhere else. Neither fix reads as a fix on its own.
+
+  It also found fluorite-game/tessella_fluorite#46 on the way through, which nothing else could
+  have: the pixel offset the grid needs has been on the wire since the symbol vertex was written
+  and had only ever carried zero, so a consumer reading it in the wrong units drew correctly
+  until the day something put a value in it. 348,284 for one run, between the producer's fix and
+  the consumer's.
+
+- `textfit_p` — the other half of the same mechanism, which is a different one. The *layer* says
+  which axes to fit with `icon-text-fit`; the *sprite* says how far that fit may distort it, with
+  `textFitWidth` and `textFitHeight`. `apply_text_fit` implements the second and nothing drew it
+  until this scene: three of `textFit`'s nine combinations, from maplibre-native's own pair.
+
+  The proportional case bites, which is what makes the row worth having rather than a second copy
+  of `stretch_p`. Fitted to the same wide label, the stretch-only sprite comes out 114 pixels
+  across and the proportional one 98 — pulled back to its content box's aspect. Both read 0.
+
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
   then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.

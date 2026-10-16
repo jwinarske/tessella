@@ -1,0 +1,265 @@
+{
+ "version": 8,
+ "name": "stretchable-image-parity",
+ "sprite": "http://127.0.0.1:8081/sprites/stretch",
+ "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
+ "sources": {
+  "shields": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "nine",
+       "name": "ABC"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3915,
+        52.5262
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "nine",
+       "name": "WIDER LABEL"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.5262
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "nine",
+       "name": "M"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4185,
+        52.5262
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "fifteen",
+       "name": "ABC"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3915,
+        52.52
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "fifteen",
+       "name": "WIDER LABEL"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.52
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "fifteen",
+       "name": "M"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4185,
+        52.52
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "three",
+       "name": "ABC"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3915,
+        52.5138
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "three",
+       "name": "WIDER LABEL"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.5138
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "three",
+       "name": "M"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4185,
+        52.5138
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#f4f1ea"
+   }
+  },
+  {
+   "id": "nine",
+   "type": "symbol",
+   "source": "shields",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "nine"
+   ],
+   "layout": {
+    "icon-image": "nine-part-content",
+    "icon-text-fit": "both",
+    "icon-text-fit-padding": [
+     4,
+     6,
+     4,
+     6
+    ],
+    "icon-allow-overlap": true,
+    "icon-ignore-placement": true,
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "fifteen",
+   "type": "symbol",
+   "source": "shields",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "fifteen"
+   ],
+   "layout": {
+    "icon-image": "fifteen-part",
+    "icon-text-fit": "both",
+    "icon-text-fit-padding": [
+     4,
+     6,
+     4,
+     6
+    ],
+    "icon-allow-overlap": true,
+    "icon-ignore-placement": true,
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "three",
+   "type": "symbol",
+   "source": "shields",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "three"
+   ],
+   "layout": {
+    "icon-image": "three-part",
+    "icon-text-fit": "width",
+    "icon-text-fit-padding": [
+     4,
+     6,
+     4,
+     6
+    ],
+    "icon-allow-overlap": true,
+    "icon-ignore-placement": true,
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 16,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  }
+ ]
+}
