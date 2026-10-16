@@ -1171,6 +1171,14 @@ impl SymbolLayout {
             if pending.fonts.is_empty() || pending.text.is_empty() {
                 continue;
             }
+            // Whether this label may be set down the screen, which decides whether its
+            // punctuation's vertical forms are wanted as well. mbgl's two arms: a line-placed
+            // label that turns with the map is verticalized by the line's own direction, and a
+            // point-placed one by `text-writing-mode`. Either way the label needs an upright
+            // character of its own or there is no vertical shaping to make.
+            let codepoints: Vec<u32> = pending.text.chars().map(|at| at as u32).collect();
+            let downwards = (self.line.along_line || pending.symbol.allow_vertical_placement)
+                && tessella_glyph::vertical::allows_vertical_writing_mode(&codepoints);
             // Per section, for the reason `symbol::glyph_dependencies` gives: a section that
             // names its own stack draws from that one, and the label's answers for the rest.
             for section in &pending.sections {
@@ -1185,6 +1193,19 @@ impl SymbolLayout {
                     .collect();
                 let wanted = out.entry(stack.clone()).or_default();
                 wanted.extend(tessella_glyph::arabic::shape(&stored));
+                // A mark that has a vertical form is drawn from *that* glyph, which is in
+                // another range: a comma between two ideographs becomes U+FE11 and the label is
+                // set with a glyph nothing asked for. mbgl asks per character and with the
+                // single-character rule rather than the neighbor-sensitive one -- a dependency
+                // list cannot know what the shaping will decide, and a glyph fetched and not
+                // drawn costs nothing beyond the range it already needed.
+                if downwards {
+                    wanted.extend(
+                        stored
+                            .iter()
+                            .filter_map(|&at| tessella_glyph::vertical::punctuation_form(at)),
+                    );
+                }
                 wanted.extend(stored);
             }
         }

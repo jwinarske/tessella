@@ -148,6 +148,18 @@ done
 bash "$P/parity.sh" arealabel_p 52.52 13.405 14 1024 768 0 0
 bash "$P/parity.sh" arealabel_p 52.52 13.405 14 1024 768 0 200
 
+# And a label set *down* the screen, which is a writing system and not a property: eleven layers
+# over a plain ground, in the one script that has one. Nothing in the tree had drawn a vertical
+# label before this scene -- the tables, the shaping, the quad builder and the punctuation
+# substitution were all there and none of them had ever reached a pixel -- and it found four
+# defects, of which the control pair at the bottom found the last two. A square frame, because a
+# column of six ideographs is as tall as a row of them is wide and the rise-over-run test that
+# chooses between the two is measured against the frame's own aspect.
+for args in "14 1024 1024 0 0" "14 1024 1024 60 0" "14 1024 1024 0 200" "15 1024 1024 0 0"; do
+  # shellcheck disable=SC2086 # five words by construction: zoom, width, height, pitch, bearing
+  bash "$P/parity.sh" vertical_p 52.52 13.405 $args
+done
+
 # And the other three families' offsets, which no example style writes either. Not zero: the line
 # half leaves about 130 pixels along one tile edge, and the note in `paint_translate` says what is
 # known about that. Circle and fill-extrusion are exact, and the number is here so a change in it

@@ -2837,6 +2837,17 @@ struct PreparedSymbols {
     paint: SymbolPaintSlabs,
 }
 
+/// Whether a layer's symbols sit at points, which is the only placement `text-writing-mode` is
+/// read for.
+fn symbol_placement_is_point(layer: &tessella_style::Layer, zoom: f64) -> bool {
+    !matches!(
+        tessella_style::property::layout_value(layer, "symbol-placement", zoom, None)
+            .as_ref()
+            .and_then(tessella_style::value::Value::as_str),
+        Some("line" | "line-center")
+    )
+}
+
 /// How a layer competes for space, as its style states it.
 ///
 /// `text-allow-overlap` and the five flags beside it are *layout* properties, and none of them
@@ -2875,6 +2886,26 @@ fn placement_rules(
             icon_optional: flag("icon-optional"),
             text_ignore_placement: flag("text-ignore-placement"),
             icon_ignore_placement: flag("icon-ignore-placement"),
+            // `text-writing-mode`, for point placement alone -- which is where mbgl builds
+            // `placementModes` and nowhere else. A line-placed label is set down by the line's
+            // own direction rather than by the property, and reading it there would offer
+            // placement a choice mbgl does not have.
+            orientations: if symbol_placement_is_point(layer, zoom) {
+                tessella_place::placement::Orientations::of(
+                    tessella_style::property::layout_value(layer, "text-writing-mode", zoom, None)
+                        .as_ref()
+                        .and_then(tessella_style::value::Value::as_array)
+                        .map(|modes| {
+                            modes
+                                .iter()
+                                .filter_map(tessella_style::value::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default(),
+                )
+            } else {
+                tessella_place::placement::Orientations::Across
+            },
         },
         tessella_place::feature::Padding::uniform(pad("text-padding", 2.0)),
         tessella_place::feature::Padding::uniform(pad("icon-padding", 2.0)),
@@ -2933,6 +2964,14 @@ fn place_symbols(
     };
     #[allow(clippy::cast_possible_truncation)]
     let viewport = (view.width as f32, view.height as f32);
+    // The viewport's width over its height, which is the unit mbgl's rise-over-run test is
+    // measured in: a road has to be steeper than the *frame* is wide before its name is set down
+    // the screen rather than across it. `state.getSize().aspectRatio()`.
+    let aspect_ratio = if viewport.1 > 0.0 {
+        viewport.0 / viewport.1
+    } else {
+        1.0
+    };
     let increment = placement.borrow().increment;
 
     // The frame's grid, and the whole reason this function exists.
@@ -3295,6 +3334,7 @@ fn place_symbols(
                     |point| point,
                     walked_text_size,
                     layout.text_keep_upright,
+                    aspect_ratio,
                     &mut buffers,
                 )
             } else {
@@ -3304,6 +3344,7 @@ fn place_symbols(
                     &to_screen,
                     walked_text_size,
                     layout.text_keep_upright,
+                    aspect_ratio,
                     &mut buffers,
                 )
             };
@@ -3357,6 +3398,7 @@ fn place_symbols(
                         |point| point,
                         icon_size,
                         layout.icon_keep_upright,
+                        aspect_ratio,
                         shaped,
                     )
                 } else {
@@ -3366,6 +3408,7 @@ fn place_symbols(
                         &to_screen,
                         icon_size,
                         layout.icon_keep_upright,
+                        aspect_ratio,
                         shaped,
                     )
                 };

@@ -1,0 +1,701 @@
+{
+ "version": 8,
+ "name": "vertical-writing-parity",
+ "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
+ "sources": {
+  "places": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "across",
+       "name": "東京都"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3894646,
+        52.5304453
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "across",
+       "name": "新宿"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4001935,
+        52.5304453
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "across",
+       "name": "日本橋駅前"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4109223,
+        52.5304453
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "across",
+       "name": "東京"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4216512,
+        52.5304453
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "down",
+       "name": "東京都"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3894646,
+        52.5262672
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "down",
+       "name": "新宿"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4001935,
+        52.5262672
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "down",
+       "name": "日本橋駅前"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4109223,
+        52.5262672
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "down",
+       "name": "東京"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4216512,
+        52.5262672
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "turned",
+       "name": "JR東京駅"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3894646,
+        52.5220891
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "turned",
+       "name": "東京2020"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4001935,
+        52.5220891
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "punctuated",
+       "name": "東京、大阪。"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4109223,
+        52.5220891
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "punctuated",
+       "name": "（東京）"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4216512,
+        52.5220891
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "both",
+       "name": "新宿"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3894646,
+        52.5179109
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "both",
+       "name": "東京都"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4001935,
+        52.5179109
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "downfirst",
+       "name": "新宿"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4109223,
+        52.5179109
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "downfirst",
+       "name": "東京都"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4216512,
+        52.5179109
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "latin",
+       "name": "TOKYO"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3894646,
+        52.5137328
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "latin",
+       "name": "OSAKA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4001935,
+        52.5137328
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "alongvertical",
+       "name": "JR中央線"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         13.4075749,
+         52.5137328
+        ],
+        [
+         13.4243119,
+         52.5137328
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "along",
+       "name": "中央通り"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         13.3856881,
+         52.5095547
+        ],
+        [
+         13.4243119,
+         52.5095547
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "downline",
+       "name": "中央通り"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         13.3848298,
+         52.5304453
+        ],
+        [
+         13.3848298,
+         52.5095547
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "upline",
+       "name": "中央通り"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         13.4251702,
+         52.5095547
+        ],
+        [
+         13.4251702,
+         52.5304453
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#f4f1ea"
+   }
+  },
+  {
+   "id": "across",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "across"
+   ],
+   "layout": {
+    "symbol-placement": "point",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 20,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true,
+    "text-writing-mode": [
+     "horizontal"
+    ]
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "down",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "down"
+   ],
+   "layout": {
+    "symbol-placement": "point",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 20,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true,
+    "text-writing-mode": [
+     "vertical"
+    ]
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "turned",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "turned"
+   ],
+   "layout": {
+    "symbol-placement": "point",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 20,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true,
+    "text-writing-mode": [
+     "vertical"
+    ]
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "punctuated",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "punctuated"
+   ],
+   "layout": {
+    "symbol-placement": "point",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 20,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true,
+    "text-writing-mode": [
+     "vertical"
+    ]
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "both",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "both"
+   ],
+   "layout": {
+    "symbol-placement": "point",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 20,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true,
+    "text-writing-mode": [
+     "horizontal",
+     "vertical"
+    ]
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "downfirst",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "downfirst"
+   ],
+   "layout": {
+    "symbol-placement": "point",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 20,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true,
+    "text-writing-mode": [
+     "vertical",
+     "horizontal"
+    ]
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "latin",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "latin"
+   ],
+   "layout": {
+    "symbol-placement": "point",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 20,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true,
+    "text-writing-mode": [
+     "vertical"
+    ]
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "alongvertical",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "alongvertical"
+   ],
+   "layout": {
+    "symbol-placement": "line",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 20,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true,
+    "text-writing-mode": [
+     "vertical"
+    ]
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "along",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "along"
+   ],
+   "layout": {
+    "symbol-placement": "line",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 20,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "downline",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "downline"
+   ],
+   "layout": {
+    "symbol-placement": "line",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 20,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "upline",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "upline"
+   ],
+   "layout": {
+    "symbol-placement": "line",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 20,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  }
+ ]
+}

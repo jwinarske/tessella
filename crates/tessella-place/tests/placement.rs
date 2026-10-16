@@ -337,54 +337,11 @@ fn a_symbol_with_no_boxes_reserves_nothing() {
 
 /// A label that fits across is drawn across, even when it would also fit down.
 ///
-/// Horizontal is a preference and not a tie-break: mbgl tries it first and only reaches the
-/// vertical shaping when the first one collides. A rule that took whichever fit better would
-/// turn labels on their side as the camera moved and nothing else changed.
-#[test]
-fn horizontal_wins_when_both_fit() {
-    let candidates = [Candidate {
-        cross_tile_id: 1,
-        text: Some(Shape::Box(label((100.0, 100.0)))),
-        vertical_text: Some(Shape::Box(label((100.0, 100.0)))),
-        icon: None,
-        ..Default::default()
-    }];
-
-    let placed = place(&candidates, &Rules::default(), &mut grid());
-    assert!(placed[0].text);
-    assert!(!placed[0].vertical, "it fit across, so it is set across");
-}
-
-/// A label that does not fit across is tried down before it is given up on.
-#[test]
-fn vertical_is_tried_when_horizontal_collides() {
-    let mut grid = grid();
-
-    // Something already at the anchor, so the horizontal box has nowhere to go.
-    let blocker = [Candidate {
-        cross_tile_id: 9,
-        text: Some(Shape::Box(label((100.0, 100.0)))),
-        vertical_text: None,
-        icon: None,
-        ..Default::default()
-    }];
-    place(&blocker, &Rules::default(), &mut grid);
-
-    // The same label again, whose vertical shaping sits clear of the blocker — a real
-    // difference, since a column is tall and narrow where the row is wide and short.
-    let candidates = [Candidate {
-        cross_tile_id: 1,
-        text: Some(Shape::Box(label((100.0, 100.0)))),
-        vertical_text: Some(Shape::Box(label((600.0, 600.0)))),
-        icon: None,
-        ..Default::default()
-    }];
-
-    let placed = place(&candidates, &Rules::default(), &mut grid);
-    assert!(placed[0].text, "the vertical shaping had room");
-    assert!(placed[0].vertical, "and it is the one drawn");
-}
-
+/// Which way round a label is set, and in what order the two are tried, is the style's list and
+/// not a rule of placement's own — see the `writing_mode` module below. A label that fits both
+/// ways is set across *because the layer asked for across first*, and a layer that asked only to
+/// be set down has no fallback at all.
+///
 /// A label with nowhere to go either way is not placed, and claims no orientation.
 #[test]
 fn neither_orientation_fits() {
@@ -406,10 +363,158 @@ fn neither_orientation_fits() {
         ..Default::default()
     }];
 
-    let placed = place(&candidates, &Rules::default(), &mut grid);
+    // Both ways offered, so the answer is that neither fit rather than that one was not tried.
+    let rules = Rules {
+        orientations: tessella_place::placement::Orientations::AcrossThenDown,
+        ..Rules::default()
+    };
+    let placed = place(&candidates, &rules, &mut grid);
     assert!(!placed[0].text);
     assert!(
         !placed[0].vertical,
         "an unplaced label is not drawn in either orientation"
     );
+}
+
+/// `text-writing-mode`: which way round a label is set, and in what order the two are tried.
+///
+/// The property is a *list* and its order is the whole of it. mbgl keeps it on the bucket as
+/// `placementModes` and walks it taking the first mode that places, so a layer naming only
+/// `vertical` has no horizontal fallback at all. This read it for one thing — whether a vertical
+/// shaping should be made — and then drew whichever half placement happened to try first, which
+/// was always the horizontal one.
+mod writing_mode {
+    use super::{grid, label};
+    use tessella_place::placement::{Candidate, Orientations, Rules, Shape, place};
+
+    /// A label shaped both ways: across at `anchor`, and down at `down`.
+    fn two_ways(id: u32, anchor: (f32, f32), down: (f32, f32)) -> Candidate {
+        Candidate {
+            cross_tile_id: id,
+            text: Some(Shape::Box(label(anchor))),
+            vertical_text: Some(Shape::Box(label(down))),
+            icon: None,
+            ..Default::default()
+        }
+    }
+
+    fn rules(orientations: Orientations) -> Rules {
+        Rules {
+            orientations,
+            ..Rules::default()
+        }
+    }
+
+    #[test]
+    fn the_list_is_read_in_the_order_the_style_wrote_it() {
+        assert_eq!(Orientations::of(["horizontal"]), Orientations::Across);
+        assert_eq!(Orientations::of(["vertical"]), Orientations::Down);
+        assert_eq!(
+            Orientations::of(["horizontal", "vertical"]),
+            Orientations::AcrossThenDown
+        );
+        assert_eq!(
+            Orientations::of(["vertical", "horizontal"]),
+            Orientations::DownThenAcross
+        );
+    }
+
+    /// Duplicates go and the first appearance keeps its place, which is `std::set`'s part in
+    /// mbgl's `remove_if`.
+    #[test]
+    fn a_repeated_mode_is_named_once() {
+        assert_eq!(
+            Orientations::of(["vertical", "horizontal", "vertical"]),
+            Orientations::DownThenAcross
+        );
+    }
+
+    /// A list naming neither mode is the default, which is mbgl's empty `placementModes` taking
+    /// the same branch as a horizontal-only one.
+    #[test]
+    fn a_list_of_nothing_is_set_across() {
+        assert_eq!(Orientations::of([]), Orientations::Across);
+        assert_eq!(Orientations::of(["sideways"]), Orientations::Across);
+    }
+
+    #[test]
+    fn vertical_alone_is_set_down_even_where_across_would_fit() {
+        let candidates = [two_ways(1, (100.0, 100.0), (400.0, 400.0))];
+        let placed = place(&candidates, &rules(Orientations::Down), &mut grid());
+        assert!(placed[0].text, "the label is drawn");
+        assert!(placed[0].vertical, "and set down, which is what was asked");
+    }
+
+    #[test]
+    fn across_first_is_set_across_even_where_down_would_fit() {
+        let candidates = [two_ways(1, (100.0, 100.0), (400.0, 400.0))];
+        let placed = place(
+            &candidates,
+            &rules(Orientations::AcrossThenDown),
+            &mut grid(),
+        );
+        assert!(placed[0].text);
+        assert!(!placed[0].vertical);
+    }
+
+    #[test]
+    fn down_first_is_set_down_even_where_across_would_fit() {
+        let candidates = [two_ways(1, (100.0, 100.0), (400.0, 400.0))];
+        let placed = place(
+            &candidates,
+            &rules(Orientations::DownThenAcross),
+            &mut grid(),
+        );
+        assert!(placed[0].text);
+        assert!(placed[0].vertical);
+    }
+
+    /// The second mode is a *fallback*, so it is taken where the first does not fit.
+    #[test]
+    fn the_second_mode_is_tried_where_the_first_collides() {
+        let blocker = Candidate {
+            cross_tile_id: 1,
+            text: Some(Shape::Box(label((100.0, 100.0)))),
+            ..Default::default()
+        };
+        let candidates = [blocker, two_ways(2, (100.0, 100.0), (400.0, 400.0))];
+        let placed = place(
+            &candidates,
+            &rules(Orientations::AcrossThenDown),
+            &mut grid(),
+        );
+        assert!(placed[1].text, "the label found room the other way round");
+        assert!(placed[1].vertical);
+    }
+
+    /// And a mode the style did not name is not a fallback: a layer that asks only to be set
+    /// down draws nothing where it cannot be, rather than quietly turning the label.
+    #[test]
+    fn a_mode_the_list_does_not_name_is_never_tried() {
+        let blocker = Candidate {
+            cross_tile_id: 1,
+            text: Some(Shape::Box(label((400.0, 400.0)))),
+            ..Default::default()
+        };
+        let candidates = [blocker, two_ways(2, (100.0, 100.0), (400.0, 400.0))];
+        let placed = place(&candidates, &rules(Orientations::Down), &mut grid());
+        assert!(
+            !placed[1].text,
+            "the label fell back to across, which the style did not ask for"
+        );
+    }
+
+    /// A label with no second shaping is drawn across whatever the list says: a name with no
+    /// upright character in it has nothing to set down.
+    #[test]
+    fn a_label_with_one_shaping_is_drawn_whatever_the_list_says() {
+        let candidates = [Candidate {
+            cross_tile_id: 1,
+            text: Some(Shape::Box(label((100.0, 100.0)))),
+            ..Default::default()
+        }];
+        let placed = place(&candidates, &rules(Orientations::Down), &mut grid());
+        assert!(placed[0].text);
+        assert!(!placed[0].vertical);
+    }
 }
