@@ -134,8 +134,8 @@ fn frame_stream() -> (BTreeMap<u64, Binding>, Vec<OrderEntry>) {
     let mut bindings = BTreeMap::new();
     let mut order = Vec::new();
     while let Some(record) = consumer.peek() {
-        match record.kind {
-            EnvelopeKind::GeometryAdd => {
+        match record.kind.known() {
+            Some(EnvelopeKind::GeometryAdd) => {
                 if let Some(add) = GeometryAdd::from_bytes(record.record) {
                     let size = size_of::<AttributeDesc>();
                     let start = add.attrs.offset as usize;
@@ -164,7 +164,7 @@ fn frame_stream() -> (BTreeMap<u64, Binding>, Vec<OrderEntry>) {
                     }
                 }
             }
-            EnvelopeKind::OrderUpdate => {
+            Some(EnvelopeKind::OrderUpdate) => {
                 if let Some(update) = OrderUpdate::from_bytes(record.record) {
                     let size = size_of::<OrderEntry>();
                     let start = update.entries.offset as usize;

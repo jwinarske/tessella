@@ -128,13 +128,17 @@ impl Scene {
     pub(crate) fn drain(consumer: &mut Consumer, arena: &SlabArena) -> Self {
         let mut scene = Self::default();
         while let Some(record) = consumer.peek() {
-            match record.kind {
-                EnvelopeKind::GeometryAdd => {
+            // Whatever it is, it is advanced past at the end of the loop: a kind this build does
+            // not know is skipped rather than left to stall the drain. Nothing the producer here
+            // writes is one.
+            let kind = record.kind.known();
+            match kind {
+                Some(EnvelopeKind::GeometryAdd) => {
                     if let Some(add) = GeometryAdd::from_bytes(record.record) {
                         scene.add_geometry(&add, record.payload, arena);
                     }
                 }
-                EnvelopeKind::ViewUse => {
+                Some(EnvelopeKind::ViewUse) => {
                     if let Some(use_) = ViewUse::from_bytes(record.record) {
                         scene.uses.push(Drawable {
                             geometry: use_.geometry,
@@ -144,7 +148,7 @@ impl Scene {
                         });
                     }
                 }
-                EnvelopeKind::TextureUpdate => {
+                Some(EnvelopeKind::TextureUpdate) => {
                     if let Some(update) = TextureUpdate::from_bytes(record.record) {
                         let start = update.pixels.offset as usize;
                         let end = start + update.pixels.count as usize;
@@ -171,7 +175,7 @@ impl Scene {
                         }
                     }
                 }
-                EnvelopeKind::UboUpdate => {
+                Some(EnvelopeKind::UboUpdate) => {
                     if let Some(update) = UboUpdate::from_bytes(record.record) {
                         let start = update.data.offset as usize;
                         let end = start + update.data.count as usize;
@@ -182,7 +186,7 @@ impl Scene {
                         }
                     }
                 }
-                EnvelopeKind::OrderUpdate => {
+                Some(EnvelopeKind::OrderUpdate) => {
                     if let Some(update) = OrderUpdate::from_bytes(record.record) {
                         scene.order = read_span::<OrderEntry>(record.payload, update.entries)
                             .into_iter()

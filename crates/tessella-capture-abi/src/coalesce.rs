@@ -365,8 +365,10 @@ mod tests {
         let (kind, record, consumed) = consumer
             .peek()
             .map(|record| (record.kind, record.record.to_vec(), record.consumed()))?;
+        // Advance whatever it was: nothing here writes a kind this build does not know, and
+        // leaving one unconsumed would stall the drain rather than report it.
         consumer.advance(consumed);
-        Some((kind, record))
+        Some((kind.known()?, record))
     }
 
     fn drain(consumer: &mut Consumer) -> Vec<(EnvelopeKind, Vec<u8>)> {

@@ -136,7 +136,12 @@ fn emit_frame_for(
 
     let mut kinds = BTreeMap::new();
     while let Some(record) = consumer.peek() {
-        *kinds.entry(format!("{:?}", record.kind)).or_insert(0) += 1;
+        *kinds
+            .entry(format!(
+                "{:?}",
+                record.kind.known().expect("a kind this build names")
+            ))
+            .or_insert(0) += 1;
         let consumed = record.consumed();
         consumer.advance(consumed);
     }
@@ -540,20 +545,20 @@ fn a_frame_touches_only_its_own_view() {
 
             let mut checked = 0;
             while let Some(record) = consumer.peek() {
-                let named = match record.kind {
-                    EnvelopeKind::ViewUse => {
+                let named = match record.kind.known() {
+                    Some(EnvelopeKind::ViewUse) => {
                         ViewUse::from_bytes(record.record).map(|use_| use_.view)
                     }
-                    EnvelopeKind::ViewRelease => {
+                    Some(EnvelopeKind::ViewRelease) => {
                         ViewRelease::from_bytes(record.record).map(|release| release.view)
                     }
-                    EnvelopeKind::UboUpdate => {
+                    Some(EnvelopeKind::UboUpdate) => {
                         UboUpdate::from_bytes(record.record).map(|update| update.view)
                     }
-                    EnvelopeKind::StencilTiles => {
+                    Some(EnvelopeKind::StencilTiles) => {
                         StencilTiles::from_bytes(record.record).map(|tiles| tiles.view)
                     }
-                    EnvelopeKind::OrderUpdate => {
+                    Some(EnvelopeKind::OrderUpdate) => {
                         OrderUpdate::from_bytes(record.record).map(|order| order.view)
                     }
                     _ => None,
@@ -1034,7 +1039,12 @@ mod teardown {
         frame::teardown_view(producer, arena, session, view).expect("tears down");
         let mut kinds = BTreeMap::new();
         while let Some(record) = consumer.peek() {
-            *kinds.entry(format!("{:?}", record.kind)).or_insert(0) += 1;
+            *kinds
+                .entry(format!(
+                    "{:?}",
+                    record.kind.known().expect("a kind this build names")
+                ))
+                .or_insert(0) += 1;
             let consumed = record.consumed();
             consumer.advance(consumed);
         }

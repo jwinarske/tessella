@@ -199,7 +199,12 @@ fn nothing_is_released_because_nothing_is_retained() {
 
     let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
     while let Some(record) = consumer.peek() {
-        *kinds.entry(format!("{:?}", record.kind)).or_default() += 1;
+        *kinds
+            .entry(format!(
+                "{:?}",
+                record.kind.known().expect("a kind this build names")
+            ))
+            .or_default() += 1;
         let consumed = record.consumed();
         consumer.advance(consumed);
     }

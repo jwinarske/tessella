@@ -140,9 +140,9 @@ impl Live {
             let mut records = 0;
             while let Some(record) = self.consumer.peek() {
                 records += 1;
-                match record.kind {
-                    EnvelopeKind::GeometryAdd => seen.adds += 1,
-                    EnvelopeKind::GeometryRemove => seen.removes += 1,
+                match record.kind.known() {
+                    Some(EnvelopeKind::GeometryAdd) => seen.adds += 1,
+                    Some(EnvelopeKind::GeometryRemove) => seen.removes += 1,
                     _ => {}
                 }
                 let consumed = record.consumed();
@@ -170,9 +170,9 @@ impl Live {
             // SAFETY: a live map.
             assert_eq!(unsafe { tessella_ffi::tessella_tick(self.map) }, Status::Ok);
             while let Some(record) = self.consumer.peek() {
-                match record.kind {
-                    EnvelopeKind::GeometryAdd => seen.adds += 1,
-                    EnvelopeKind::GeometryRemove => seen.removes += 1,
+                match record.kind.known() {
+                    Some(EnvelopeKind::GeometryAdd) => seen.adds += 1,
+                    Some(EnvelopeKind::GeometryRemove) => seen.removes += 1,
                     _ => {}
                 }
                 let consumed = record.consumed();

@@ -160,12 +160,12 @@ impl Live {
             let mut records = 0;
             while let Some(record) = self.consumer.peek() {
                 records += 1;
-                match record.kind {
-                    EnvelopeKind::GeometryAdd => counted.adds += 1,
-                    EnvelopeKind::GeometryRemove => counted.removes += 1,
-                    EnvelopeKind::ViewUse => counted.uses += 1,
-                    EnvelopeKind::ViewRelease => counted.releases += 1,
-                    EnvelopeKind::CameraUpdate => {
+                match record.kind.known() {
+                    Some(EnvelopeKind::GeometryAdd) => counted.adds += 1,
+                    Some(EnvelopeKind::GeometryRemove) => counted.removes += 1,
+                    Some(EnvelopeKind::ViewUse) => counted.uses += 1,
+                    Some(EnvelopeKind::ViewRelease) => counted.releases += 1,
+                    Some(EnvelopeKind::CameraUpdate) => {
                         use tessella_capture_abi::envelope::WireRecord as _;
                         if let Some(camera) =
                             tessella_capture_abi::envelope::CameraUpdate::from_bytes(record.record)
@@ -173,7 +173,7 @@ impl Live {
                             counted.light = camera.light.intensity;
                         }
                     }
-                    EnvelopeKind::OrderUpdate => {
+                    Some(EnvelopeKind::OrderUpdate) => {
                         use tessella_capture_abi::envelope::WireRecord as _;
                         if let Some(order) =
                             tessella_capture_abi::envelope::OrderUpdate::from_bytes(record.record)

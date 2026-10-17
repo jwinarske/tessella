@@ -492,8 +492,8 @@ fn the_atlas_is_uploaded_and_the_placements_are_written() {
     let mut slot4 = Vec::new();
     let mut first_texture = None;
     while let Some(record) = consumer.peek() {
-        match record.kind {
-            EnvelopeKind::TextureUpdate => {
+        match record.kind.known() {
+            Some(EnvelopeKind::TextureUpdate) => {
                 if let Some(update) = TextureUpdate::from_bytes(record.record) {
                     if update.texture == TextureId(20) {
                         atlas_uploaded = true;
@@ -503,7 +503,7 @@ fn the_atlas_is_uploaded_and_the_placements_are_written() {
                     first_texture.get_or_insert(update.texture);
                 }
             }
-            EnvelopeKind::UboUpdate => {
+            Some(EnvelopeKind::UboUpdate) => {
                 if let Some(update) = UboUpdate::from_bytes(record.record)
                     && update.slot == 4
                     && update.layer_index >= 0
@@ -655,13 +655,13 @@ fn an_extrusion_pattern_binds_its_own_shader() {
     let mut shaders = BTreeMap::new();
     let mut slot4 = Vec::new();
     while let Some(record) = consumer.peek() {
-        match record.kind {
-            EnvelopeKind::GeometryAdd => {
+        match record.kind.known() {
+            Some(EnvelopeKind::GeometryAdd) => {
                 if let Some(add) = GeometryAdd::from_bytes(record.record) {
                     *shaders.entry(add.builtin_shader).or_insert(0) += 1;
                 }
             }
-            EnvelopeKind::UboUpdate => {
+            Some(EnvelopeKind::UboUpdate) => {
                 if let Some(update) = UboUpdate::from_bytes(record.record)
                     && update.slot == 4
                     && update.layer_index >= 0

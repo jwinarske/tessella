@@ -344,7 +344,7 @@ fn emit_frame() -> Vec<EnvelopeKind> {
 
     let mut kinds = Vec::new();
     while let Some(record) = consumer.peek() {
-        kinds.push(record.kind);
+        kinds.push(record.kind.known().expect("a kind this build names"));
         let consumed = record.consumed();
         consumer.advance(consumed);
     }
