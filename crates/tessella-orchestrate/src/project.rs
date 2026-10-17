@@ -44,6 +44,13 @@ pub enum Placement {
     NotEnoughRoom,
     /// The label would read right to left. Run again with `flip` set.
     NeedsFlipping,
+    /// The line runs down the screen more than across it, so the label's *other* shaping is the
+    /// one to draw.
+    ///
+    /// mbgl's `PlacementResult::UseVertical`, and the reason a line label is shaped twice: which
+    /// way round a road name reads is a property of the road on *screen*, so it cannot be
+    /// decided when the tile is built. The caller hides this half and walks the other.
+    UseVertical,
 }
 
 /// How a label is placed along its line.
@@ -59,6 +66,29 @@ pub struct LineOffsets {
     pub flip: bool,
     /// `text-keep-upright`: answer [`Placement::NeedsFlipping`] rather than draw it mirrored.
     pub keep_upright: bool,
+    /// Whether the label was shaped the other way round as well, so there is an alternative to
+    /// ask for.
+    ///
+    /// mbgl's `writingModes == (Horizontal | Vertical)`, which is the condition on the rise-over-
+    /// run test: a label with one shaping has nothing to switch to and is never asked.
+    pub both_ways: bool,
+    /// The viewport's width over its height, which the rise-over-run test is measured in.
+    pub aspect_ratio: f32,
+    /// Whether these are the glyphs of the label's *vertical* shaping.
+    ///
+    /// It changes the upright test and nothing else. mbgl asks a different question of a label
+    /// set down the screen than of one set across it —
+    ///
+    /// ```text
+    /// if ((writingModes == WritingModeType::Vertical) ? (firstPoint.y < lastPoint.y)
+    ///                                                 : (firstPoint.x > lastPoint.x))
+    /// ```
+    ///
+    /// — because "backwards" is a different direction for the two: a label set across reads
+    /// backwards when its first glyph is to the *right* of its last, and one set down reads
+    /// backwards when its first glyph is *above* its last. Asked the horizontal question, a
+    /// road running down the screen never answers yes, and the label is drawn mirrored.
+    pub vertical: bool,
 }
 
 impl Default for LineOffsets {
@@ -71,8 +101,42 @@ impl Default for LineOffsets {
             // The style default, and the one that matters: false draws half the labels on a
             // street tile backwards.
             keep_upright: true,
+            both_ways: false,
+            aspect_ratio: 1.0,
+            vertical: false,
         }
     }
+}
+
+/// What the two end glyphs say about which way round to draw the label.
+///
+/// mbgl's `requiresOrientationChange`, and both of its questions. The first is asked only of a
+/// label that was shaped both ways: a road steeper than it is wide reads better set down the
+/// screen, and the *vertical* shaping is the one to draw. The second is which end comes first,
+/// and it is a different question for the two shapings — a label set across reads backwards when
+/// its first glyph is to the right of its last, and one set down when its first glyph is above
+/// its last.
+fn orientation_change(
+    first: (f32, f32),
+    last: (f32, f32),
+    offsets: &LineOffsets,
+) -> Option<Placement> {
+    if offsets.both_ways {
+        let rise = (last.1 - first.1).abs();
+        let run = (last.0 - first.0).abs() * offsets.aspect_ratio;
+        if rise > run {
+            return Some(Placement::UseVertical);
+        }
+    }
+    // `firstPoint.y < lastPoint.y` in mbgl, and the comparison turns over on the way here: mbgl
+    // asks it of GL clip coordinates, where y points *up*, and these are screen pixels, where it
+    // points down. The x question transfers unchanged, which is why only this one needed saying.
+    let backwards = if offsets.vertical {
+        first.1 > last.1
+    } else {
+        first.0 > last.0
+    };
+    backwards.then_some(Placement::NeedsFlipping)
 }
 
 /// Places one glyph at `offset` along `line` from `anchor`.
@@ -189,6 +253,9 @@ pub fn place_glyphs_along_line(
         let first = place(glyph_offsets[0]);
         let last = place(*glyph_offsets.last().expect("checked non-empty"));
         match (first, last) {
+            // The x question alone, and in the label plane: which *shaping* to draw and which way
+            // round a vertical one reads are both asked of the screen, by `place_upright`, for
+            // the reason its own comment gives. This test is the one a direct caller gets.
             (Some(first), Some(last)) if first.point.0 > last.point.0 => {
                 return Placement::NeedsFlipping;
             }
@@ -247,18 +314,21 @@ where
         Placement::Placed(glyphs) if offsets.keep_upright && glyphs.len() > 1 => {
             let first = to_screen(glyphs.first().expect("checked non-empty").point);
             let last = to_screen(glyphs.last().expect("checked non-empty").point);
-            if first.0 > last.0 {
-                let flipped = LineOffsets {
-                    flip: true,
-                    keep_upright: false,
-                    ..*offsets
-                };
-                (
-                    place_glyphs_along_line(line, anchor, segment, glyph_offsets, &flipped),
-                    true,
-                )
-            } else {
-                (Placement::Placed(glyphs), false)
+            match orientation_change(first, last, offsets) {
+                Some(Placement::NeedsFlipping) => {
+                    let flipped = LineOffsets {
+                        flip: true,
+                        keep_upright: false,
+                        ..*offsets
+                    };
+                    (
+                        place_glyphs_along_line(line, anchor, segment, glyph_offsets, &flipped),
+                        true,
+                    )
+                }
+                // The other shaping is the caller's to walk, so there is nothing to place here.
+                Some(change) => (change, false),
+                None => (Placement::Placed(glyphs), false),
             }
         }
         other => (other, false),

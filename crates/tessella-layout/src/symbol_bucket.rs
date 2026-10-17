@@ -334,6 +334,20 @@ impl SymbolBuffers {
         );
     }
 
+    /// Turns every vertex from `from` on by `angle`, in radians.
+    ///
+    /// mbgl's `placedSymbol.angle`, which is one angle per *placed symbol* rather than per quad
+    /// and is written into the dynamic attribute beside the anchor. It exists for one case: a
+    /// label set down the screen is laid out as a row of glyphs each turned a quarter turn the
+    /// other way, and this is the turn that makes the row a column. The alternative -- turning
+    /// the shaping itself -- is what mbgl explicitly does not do, because the row is also what
+    /// the *collision* box is measured from.
+    pub fn turn(&mut self, from: usize, angle: f32) {
+        for slot in self.dynamic.iter_mut().skip(from) {
+            slot[2] = angle;
+        }
+    }
+
     /// The same, for a quad whose corners carry a fixed pixel term as well as an em one.
     ///
     /// Only a cell of a stretched icon's grid does. `pixel_offset` is the top-left corner's pair
@@ -926,6 +940,17 @@ pub fn build_symbols_with<G: Glyphs + ?Sized>(
                 options.vertex_size,
                 &stacks,
             );
+            // And turned a quarter turn clockwise, which is what makes it a column: the quad
+            // builder lays a vertical shaping out as a *row* of glyphs each turned a quarter
+            // turn the other way. mbgl says so where it sets the same angle -- "vertical POI
+            // labels, that are rotated 90deg CW and whose glyphs must preserve upright
+            // orientation need to be rotated 90deg CCW" -- and without the turn the row is drawn
+            // as a row with every glyph in it on its side.
+            //
+            // Set here rather than when the half is chosen, as mbgl sets it in `addToBuffers`:
+            // both halves are in one buffer and either may be the one drawn, so each carries its
+            // own angle from the start.
+            buffers.turn(vertices, core::f32::consts::FRAC_PI_2);
             Some(Vertical {
                 at: vertices,
                 extent: (shaped.top, shaped.bottom, shaped.left, shaped.right),

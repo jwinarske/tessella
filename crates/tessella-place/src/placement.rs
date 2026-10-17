@@ -46,6 +46,89 @@ pub struct Rules {
     pub text_ignore_placement: bool,
     /// `icon-ignore-placement`.
     pub icon_ignore_placement: bool,
+    /// `text-writing-mode`: which ways round a label may be set, in the order the style asked.
+    pub orientations: Orientations,
+}
+
+/// One way round to set a label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Orientation {
+    /// Across the screen, which is what every script without a vertical form does.
+    Across,
+    /// Down it, which is what `text-writing-mode: vertical` asks for.
+    Down,
+}
+
+/// Which ways round a label may be set, and in what order they are tried.
+///
+/// mbgl keeps the layer's `text-writing-mode` list on the bucket as `placementModes`,
+/// deduplicated and *in the order the style wrote it*, and walks it taking the first mode that
+/// places. The order is the whole of the property: a list is not a set of permissions but a
+/// preference, and only the modes it names are tried — a layer that asks for `vertical` alone and
+/// whose label will not fit down draws nothing rather than falling back across.
+///
+/// The spec's enum has exactly two values, so a deduplicated list is one of four things and an
+/// enum says which without a vector. mbgl builds it for `symbol-placement: point` alone: a
+/// line-placed label's orientation comes from the line's own direction, and the property is not
+/// read there at all.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Orientations {
+    /// Across only, which is the property's default and what a layer that does not write it gets.
+    #[default]
+    Across,
+    /// Down only.
+    Down,
+    /// Across, and down where it did not fit.
+    AcrossThenDown,
+    /// Down, and across where it did not fit.
+    DownThenAcross,
+}
+
+impl Orientations {
+    /// The orders to try, first choice first.
+    #[must_use]
+    pub const fn order(self) -> &'static [Orientation] {
+        match self {
+            Self::Across => &[Orientation::Across],
+            Self::Down => &[Orientation::Down],
+            Self::AcrossThenDown => &[Orientation::Across, Orientation::Down],
+            Self::DownThenAcross => &[Orientation::Down, Orientation::Across],
+        }
+    }
+
+    /// Whether `vertical` is one of them, which is mbgl's `allowVerticalPlacement`.
+    ///
+    /// It decides more than the order: a label is only shaped the second way when the layer asks
+    /// for it, and which characters that shaping keeps upright depends on it as well.
+    #[must_use]
+    pub const fn allows_vertical(self) -> bool {
+        !matches!(self, Self::Across)
+    }
+
+    /// The list a style wrote, deduplicated and in order, as mbgl's `placementModes`.
+    ///
+    /// Anything the spec does not name is ignored, and a list naming neither mode is `Across` —
+    /// mbgl's empty `placementModes` takes the same branch as a horizontal-only one.
+    #[must_use]
+    pub fn of<'a>(modes: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut order: Vec<Orientation> = Vec::new();
+        for mode in modes {
+            let orientation = match mode {
+                "horizontal" => Orientation::Across,
+                "vertical" => Orientation::Down,
+                _ => continue,
+            };
+            if !order.contains(&orientation) {
+                order.push(orientation);
+            }
+        }
+        match order.as_slice() {
+            [Orientation::Down] => Self::Down,
+            [Orientation::Across, Orientation::Down] => Self::AcrossThenDown,
+            [Orientation::Down, Orientation::Across] => Self::DownThenAcross,
+            _ => Self::Across,
+        }
+    }
 }
 
 /// One symbol offered for placement.
@@ -297,36 +380,59 @@ pub fn place(candidates: &[Candidate], rules: &Rules, grid: &mut GridIndex<u32>)
                 && shape.in_grid(grid)
                 && (rules.text_allow_overlap || !shape.collides(grid))
         };
-        let mut place_text = match &candidate.text {
-            None => false,
-            Some(shape) => fits(shape, grid),
-        };
-        // And where it did not, the other places the style offered. mbgl walks
-        // `variableTextAnchors` and keeps the first that fits; the one the label was built
-        // around is the first of them, which is why this runs only after that one failed.
+        // Set across: where the label was built, and then the other places the style offered.
+        // mbgl walks `variableTextAnchors` and keeps the first that fits; the one the label was
+        // built around is the first of them, which is why the rest run only after it failed.
         //
         // The shift is carried out rather than recomputed: what placement decided has to reach
         // the vertices, and a second derivation of it is a second chance to disagree.
-        let mut shift = candidate.shift;
-        let mut chosen: Option<&Shape> = candidate.text.as_ref();
-        if !place_text {
-            for alternative in &candidate.alternatives {
-                if fits(&alternative.shape, grid) {
-                    place_text = true;
-                    shift = alternative.shift;
-                    chosen = Some(&alternative.shape);
-                    break;
-                }
+        let across = |grid: &GridIndex<u32>| {
+            if let Some(shape) = &candidate.text
+                && fits(shape, grid)
+            {
+                return Some((shape, candidate.shift));
             }
-        }
-        // Horizontal first, and vertical only if it did not fit. mbgl's order, and it is a
-        // preference rather than a tie-break: a label that fits both ways is drawn across.
+            candidate
+                .alternatives
+                .iter()
+                .find(|alternative| fits(&alternative.shape, grid))
+                .map(|alternative| (&alternative.shape, alternative.shift))
+        };
+        // And set down, which is its own box at its own anchor: a vertical shaping takes no
+        // variable offset, as it takes none in mbgl either.
+        let down = |grid: &GridIndex<u32>| {
+            candidate
+                .vertical_text
+                .as_ref()
+                .filter(|shape| fits(shape, grid))
+                .map(|shape| (shape, (0.0, 0.0)))
+        };
+
+        // Which way round, in the order the style asked for. mbgl walks `bucket.placementModes`
+        // and takes the first mode that places, and the loop is entered at all only for a label
+        // that *has* a second shaping: a Latin name in a vertical layer has no upright character
+        // to set down, so it is drawn across whatever the list says.
+        let order: &[Orientation] = if candidate.vertical_text.is_some() {
+            rules.orientations.order()
+        } else {
+            &[Orientation::Across]
+        };
+        let mut place_text = false;
+        let mut shift = candidate.shift;
+        let mut chosen: Option<&Shape> = None;
         let mut vertical = false;
-        if !place_text && let Some(shape) = &candidate.vertical_text {
-            place_text = shape.placeable()
-                && shape.in_grid(grid)
-                && (rules.text_allow_overlap || !shape.collides(grid));
-            vertical = place_text;
+        for orientation in order {
+            let found = match orientation {
+                Orientation::Across => across(grid),
+                Orientation::Down => down(grid),
+            };
+            if let Some((shape, at)) = found {
+                place_text = true;
+                shift = at;
+                chosen = Some(shape);
+                vertical = *orientation == Orientation::Down;
+                break;
+            }
         }
         let mut place_icon = match &candidate.icon {
             None => false,
@@ -353,16 +459,11 @@ pub fn place(candidates: &[Candidate], rules: &Rules, grid: &mut GridIndex<u32>)
             place_icon = place_text && place_icon;
         }
 
-        // Only what was placed goes in, and only if it is meant to block.
-        // Whichever orientation won is the one that blocks, since it is the one drawn.
-        let drawn = if vertical {
-            candidate.vertical_text.as_ref()
-        } else {
-            chosen
-        };
+        // Only what was placed goes in, and only if it is meant to block. Whichever orientation
+        // won is the one that blocks, since it is the one drawn.
         if place_text
             && !rules.text_ignore_placement
-            && let Some(shape) = drawn
+            && let Some(shape) = chosen
         {
             shape.insert(grid, candidate.cross_tile_id);
         }

@@ -299,3 +299,142 @@ fn a_single_glyph_needs_no_upright_test() {
     };
     assert_eq!(glyphs.len(), 1);
 }
+
+/// Which way round a road name reads, where the road runs down the screen rather than across it.
+///
+/// mbgl's `requiresOrientationChange` asks two questions of a label's end glyphs, and until the
+/// scene `vertical_p` nothing here asked either of them of a vertical label. A road steeper than
+/// the frame is wide is named *down* it, from the label's second shaping; and "backwards" is a
+/// different direction for that shaping than for the first.
+mod down_the_screen {
+    use super::{WORD, turns};
+    use tessella_orchestrate::project::{LineOffsets, Placement, place_upright};
+
+    /// A line running down the screen at x = 100, four hundred units long.
+    fn downward() -> Vec<(f32, f32)> {
+        vec![(100.0, 0.0), (100.0, 100.0), (100.0, 300.0), (100.0, 400.0)]
+    }
+
+    /// The same line in the other order, so it runs up the screen.
+    fn upward() -> Vec<(f32, f32)> {
+        let mut line = downward();
+        line.reverse();
+        line
+    }
+
+    fn offsets(both_ways: bool, vertical: bool) -> LineOffsets {
+        LineOffsets {
+            both_ways,
+            vertical,
+            // A square frame, so "steeper than it is wide" is the plain comparison.
+            aspect_ratio: 1.0,
+            ..LineOffsets::default()
+        }
+    }
+
+    /// The label's *other* shaping is the one to draw, and this walk has nothing to place.
+    #[test]
+    fn a_road_down_the_screen_asks_for_the_vertical_shaping() {
+        let (placement, _) = place_upright(
+            &downward(),
+            (100.0, 200.0),
+            1,
+            &WORD,
+            &offsets(true, false),
+            |point| point,
+        );
+        assert_eq!(placement, Placement::UseVertical);
+    }
+
+    /// A road across the screen keeps the shaping it has, and a label with only one shaping is
+    /// never asked: there is nothing to switch to.
+    #[test]
+    fn a_road_across_the_screen_does_not() {
+        let across = vec![(0.0, 100.0), (400.0, 100.0)];
+        let (placement, _) = place_upright(
+            &across,
+            (200.0, 100.0),
+            0,
+            &WORD,
+            &offsets(true, false),
+            |point| point,
+        );
+        assert!(matches!(placement, Placement::Placed(_)));
+
+        let (placement, _) = place_upright(
+            &downward(),
+            (100.0, 200.0),
+            1,
+            &WORD,
+            &offsets(false, false),
+            |point| point,
+        );
+        assert!(matches!(placement, Placement::Placed(_)));
+    }
+
+    /// Down the screen reads forwards, so the vertical shaping is placed as it is.
+    #[test]
+    fn a_vertical_label_down_a_downward_road_is_not_flipped() {
+        let (placement, flipped) = place_upright(
+            &downward(),
+            (100.0, 200.0),
+            1,
+            &WORD,
+            &offsets(false, true),
+            |point| point,
+        );
+        assert!(!flipped);
+        let Placement::Placed(glyphs) = placement else {
+            panic!("it fits")
+        };
+        let ys: Vec<f32> = glyphs.iter().map(|glyph| glyph.point.1).collect();
+        for pair in ys.windows(2) {
+            assert!(pair[1] > pair[0], "{ys:?} does not read downwards");
+        }
+    }
+
+    /// And up the screen reads backwards, which is the question the horizontal test cannot ask:
+    /// both ends of this road have the same x.
+    #[test]
+    fn a_vertical_label_up_an_upward_road_is_flipped() {
+        let (placement, flipped) = place_upright(
+            &upward(),
+            (100.0, 200.0),
+            1,
+            &WORD,
+            &offsets(false, true),
+            |point| point,
+        );
+        assert!(flipped, "the label was left reading upwards");
+        let Placement::Placed(glyphs) = placement else {
+            panic!("the flipped placement fits too")
+        };
+        let ys: Vec<f32> = glyphs.iter().map(|glyph| glyph.point.1).collect();
+        for pair in ys.windows(2) {
+            assert!(pair[1] > pair[0], "{ys:?} still reads upwards");
+        }
+        for glyph in &glyphs {
+            assert!(
+                turns(glyph.angle - core::f32::consts::FRAC_PI_2).abs() < 0.01,
+                "{glyph:?} does not follow the road"
+            );
+        }
+    }
+
+    /// The same road, asked the horizontal question, answers nothing at all — which is what it
+    /// was asked before, and why a name on it was drawn the wrong way round.
+    #[test]
+    fn the_horizontal_question_cannot_answer_it() {
+        for line in [downward(), upward()] {
+            let (_, flipped) = place_upright(
+                &line,
+                (100.0, 200.0),
+                1,
+                &WORD,
+                &offsets(false, false),
+                |point| point,
+            );
+            assert!(!flipped);
+        }
+    }
+}

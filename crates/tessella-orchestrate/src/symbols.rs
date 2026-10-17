@@ -604,10 +604,17 @@ impl ViewSymbols {
 
         let placed = place(&candidates, &options.rules, grid);
         self.decided.extend_from_slice(&placed);
-        for entry in &placed {
+        for (entry, label) in placed.iter().zip(labels) {
             if entry.text {
-                self.orientations
-                    .insert(entry.cross_tile_id, entry.vertical);
+                // A *point* label's orientation is settled here and a line label's is not: which
+                // way round a road name reads depends on the road's direction on screen, so
+                // mbgl's `reprojectLineLabels` decides it and this runs before the projection.
+                // Written here anyway it is placement's answer -- which for a line label only
+                // ever considered the horizontal shaping -- and it hides the half the walk chose.
+                if label.line.is_empty() {
+                    self.orientations
+                        .insert(entry.cross_tile_id, entry.vertical);
+                }
                 // Inserted even when it is zero, and removed when it is: a label that moved
                 // last frame and did not this one would otherwise keep the old shift, which
                 // draws it beside where it was placed and blinks back as soon as the map moves.
@@ -800,13 +807,18 @@ impl ViewSymbols {
     /// half of the same symbol. A shield whose number will not fit must not keep its shield: an
     /// empty box strung along a road is worse than nothing there, and it is what happens if only
     /// the text is hidden.
+    // Eight, and each is something only the caller knows: two projections, the size the walk
+    // steps at, the half's own `*-keep-upright`, and the frame's aspect. Bundling them would be
+    // a struct whose only use is this call.
+    #[allow(clippy::too_many_arguments)]
     pub fn write_line_positions<P, S>(
-        &self,
+        &mut self,
         labels: &[FrameLabel<'_>],
         project: P,
         to_screen: S,
         font_size: f32,
         keep_upright: bool,
+        aspect_ratio: f32,
         buffers: &mut SymbolBuffers,
     ) -> alloc::vec::Vec<u32>
     where
@@ -851,45 +863,94 @@ impl ViewSymbols {
                 continue;
             }
             let range = label.laid_out.vertices.clone();
-            // Four vertices to a glyph, and the distances are one per glyph.
-            let quads = range.start / 4..range.end / 4;
-            if range.end > buffers.dynamic.len() || quads.end > buffers.glyph_offsets.len() {
+            if range.end > buffers.dynamic.len() || range.end / 4 > buffers.glyph_offsets.len() {
                 continue;
             }
             let line: alloc::vec::Vec<(f32, f32)> =
                 label.line.iter().map(|point| project(*point)).collect();
-            let (placement, _flipped) = crate::project::place_upright(
-                &line,
-                project(label.laid_out.anchor),
-                label.laid_out.segment,
-                &buffers.glyph_offsets[quads],
-                &offsets,
-                &to_screen,
-            );
-            let crate::project::Placement::Placed(glyphs) = placement else {
-                // No room on the line for this label at this anchor -- the road runs out before
-                // the last glyph does. Hidden rather than left alone: what `lay_out` put in the
-                // dynamic buffer is the anchor in *tile* units, and the shader reads that buffer
-                // as label-plane coordinates, so leaving it draws the label some thousands of
-                // pixels from where it belongs. mbgl drops such a label too; the difference is
-                // that it never had a wrong position to leave behind.
-                if range.end <= buffers.opacity.len() {
-                    let hidden = tessella_layout::symbol_bucket::opacity_vertex(false, 0.0);
-                    for slot in &mut buffers.opacity[range] {
-                        *slot = hidden;
+            // A label shaped both ways is two walks, not one. mbgl reprojects per *placed
+            // symbol* and each carries its own writing mode, which is the only thing the second
+            // walk does differently -- the upright test asks about the other axis. Walked
+            // together, the vertical half takes the horizontal half's answer and a road running
+            // down the screen draws its name mirrored.
+            let boundary = label.laid_out.vertical.map_or(range.end, |vertical| {
+                vertical.at.clamp(range.start, range.end)
+            });
+            // Whether a half was walked at all, which is not the same as whether one found room.
+            // A symbol with an icon and no text reaches here with no glyphs to place; it is not a
+            // label that would not fit, and reporting it as one hides the icon it does have --
+            // twenty oneway arrows off a street tile, which is how this was found.
+            let mut attempted = false;
+            let mut any_room = false;
+            // The vertical half is walked only where the horizontal one asked for it, which is
+            // mbgl's `useVertical`: "don't do calculations for vertical glyphs unless the
+            // previous symbol was horizontal and we determined that vertical glyphs were
+            // necessary". Hidden otherwise, so the two are never both on the screen.
+            let mut use_vertical = false;
+            let mut drew_vertical = false;
+            for (half, vertical) in [(range.start..boundary, false), (boundary..range.end, true)] {
+                if half.is_empty() {
+                    continue;
+                }
+                attempted = true;
+                let offsets = crate::project::LineOffsets {
+                    vertical,
+                    both_ways: !vertical && boundary < range.end,
+                    aspect_ratio,
+                    ..offsets
+                };
+                let (placement, _flipped) = if vertical && !use_vertical {
+                    (crate::project::Placement::NotEnoughRoom, false)
+                } else {
+                    crate::project::place_upright(
+                        &line,
+                        project(label.laid_out.anchor),
+                        label.laid_out.segment,
+                        &buffers.glyph_offsets[half.start / 4..half.end / 4],
+                        &offsets,
+                        &to_screen,
+                    )
+                };
+                use_vertical = placement == crate::project::Placement::UseVertical;
+                let crate::project::Placement::Placed(glyphs) = placement else {
+                    // No room on the line for this half at this anchor -- the road runs out
+                    // before the last glyph does. Hidden rather than left alone: what `lay_out`
+                    // put in the dynamic buffer is the anchor in *tile* units, and the shader
+                    // reads that buffer as label-plane coordinates, so leaving it draws the
+                    // label some thousands of pixels from where it belongs. mbgl drops such a
+                    // label too; the difference is that it never had a wrong position to leave
+                    // behind.
+                    if half.end <= buffers.opacity.len() {
+                        let hidden = tessella_layout::symbol_bucket::opacity_vertex(false, 0.0);
+                        for slot in &mut buffers.opacity[half] {
+                            *slot = hidden;
+                        }
+                    }
+                    continue;
+                };
+                any_room = true;
+                drew_vertical = vertical;
+                for (index, glyph) in glyphs.iter().enumerate() {
+                    let base = half.start + index * 4;
+                    if base + 4 > buffers.dynamic.len() {
+                        break;
+                    }
+                    for slot in &mut buffers.dynamic[base..base + 4] {
+                        *slot = [glyph.point.0, glyph.point.1, glyph.angle];
                     }
                 }
+            }
+            // Which way round this label came out, for `write_opacity` to hide the other half
+            // with. A line label's orientation is not placement's to decide -- mbgl settles it
+            // here, in the walk, because it depends on the road's direction *on screen* and
+            // placement ran before the projection. A point label's is placement's and is left
+            // alone.
+            if boundary < range.end {
+                self.orientations.insert(label.cross_tile_id, drew_vertical);
+            }
+            // Neither way round found room, which is what the caller hides the icon for.
+            if attempted && !any_room {
                 without_room.push(label.cross_tile_id);
-                continue;
-            };
-            for (index, glyph) in glyphs.iter().enumerate() {
-                let base = range.start + index * 4;
-                if base + 4 > buffers.dynamic.len() {
-                    break;
-                }
-                for slot in &mut buffers.dynamic[base..base + 4] {
-                    *slot = [glyph.point.0, glyph.point.1, glyph.angle];
-                }
             }
         }
         without_room
@@ -921,8 +982,28 @@ impl ViewSymbols {
             if range.end > buffers.dynamic.len() {
                 continue;
             }
-            for slot in &mut buffers.dynamic[range] {
-                *slot = [x + dx, y + dy, 0.0];
+            // A label set down the screen is turned a quarter turn clockwise, and that turn is
+            // what makes it a column: the quad builder lays a vertical shaping out as a *row* of
+            // glyphs each rotated a quarter turn the other way -- mbgl's comment says as much,
+            // "vertical POI labels, that are rotated 90deg CW and whose glyphs must preserve
+            // upright orientation need to be rotated 90deg CCW" -- so without the turn the row
+            // is drawn as a row and every glyph in it is on its side.
+            //
+            // Per *half* rather than per label, and set whichever half placement chose, because
+            // mbgl sets it on the placed symbol at layout time rather than at placement time:
+            // `placedSymbol.angle = allowVerticalPlacement && writingMode == Vertical ? M_PI_2 :
+            // 0`. The two halves share this range and `write_opacity` hides one of them, so each
+            // has to carry its own angle for either to be drawable.
+            let boundary = label
+                .laid_out
+                .vertical
+                .map(|vertical| vertical.at.clamp(range.start, range.end));
+            for (at, slot) in buffers.dynamic[range.clone()].iter_mut().enumerate() {
+                let angle = match boundary {
+                    Some(boundary) if range.start + at >= boundary => core::f32::consts::FRAC_PI_2,
+                    _ => 0.0,
+                };
+                *slot = [x + dx, y + dy, angle];
             }
         }
     }
