@@ -96,12 +96,12 @@ fn emit() -> Sent {
         geometry: Vec::new(),
     };
     while let Some(record) = consumer.peek() {
-        match record.kind {
-            EnvelopeKind::TextureUpdate => {
+        match record.kind.known() {
+            Some(EnvelopeKind::TextureUpdate) => {
                 sent.textures
                     .push(TextureUpdate::from_bytes(record.record).expect("a texture update"));
             }
-            EnvelopeKind::GeometryAdd => {
+            Some(EnvelopeKind::GeometryAdd) => {
                 sent.geometry
                     .push(GeometryAdd::from_bytes(record.record).expect("a geometry add"));
             }
@@ -189,8 +189,8 @@ fn the_atlas_goes_up_before_anything_names_it() {
     let mut texture = None;
     let mut index = 0usize;
     while let Some(record) = consumer.peek() {
-        match record.kind {
-            EnvelopeKind::TextureUpdate => {
+        match record.kind.known() {
+            Some(EnvelopeKind::TextureUpdate) => {
                 let update = TextureUpdate::from_bytes(record.record).expect("a texture update");
                 // The two placeholders are 0 and 1; anything above them is an atlas.
                 if update.texture.0 > 1 && uploaded.is_none() {
@@ -198,7 +198,7 @@ fn the_atlas_goes_up_before_anything_names_it() {
                     texture = Some(update.texture);
                 }
             }
-            EnvelopeKind::GeometryAdd => {
+            Some(EnvelopeKind::GeometryAdd) => {
                 let add = GeometryAdd::from_bytes(record.record).expect("a geometry add");
                 if add.builtin_shader == BuiltIn::LineSDFShader as i32 && named.is_none() {
                     named = Some(index);

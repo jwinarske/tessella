@@ -384,10 +384,11 @@ fn dump(ring: &mut Ring, arena: &SlabArena) -> Result<Vec<u8>, String> {
     let mut builder = capture::Builder::new();
     let consumer = ring.consumer();
     while let Some(record) = consumer.peek() {
-        // `kind as u32` because a capture carries the discriminant rather than the decoded enum.
-        // Every kind here is one this build knows: the producer that wrote the ring is this
-        // binary, so there is no newer sender to carry a kind that would not decode.
-        let (kind, fixed, payload) = (record.kind as u32, record.record, record.payload);
+        // The raw discriminant, because a capture carries the number rather than the decoded
+        // enum -- and carries it whether this build knows the kind or not, so a file written by
+        // an older reader is still one a later build can read. Every kind here is one this build
+        // knows anyway: the producer that wrote the ring is this binary.
+        let (kind, fixed, payload) = (u32::from(record.kind.raw()), record.record, record.payload);
         builder.push(kind, fixed, payload);
         let consumed = record.consumed();
         consumer.advance(consumed);

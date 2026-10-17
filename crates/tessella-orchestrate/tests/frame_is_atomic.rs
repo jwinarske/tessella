@@ -188,10 +188,10 @@ fn the_retry_after_a_full_ring_is_a_whole_frame() {
     let mut orders = 0;
     let mut cameras = 0;
     while let Some(record) = consumer.peek() {
-        match record.kind {
-            EnvelopeKind::GeometryAdd => geometries += 1,
-            EnvelopeKind::OrderUpdate => orders += 1,
-            EnvelopeKind::CameraUpdate => cameras += 1,
+        match record.kind.known() {
+            Some(EnvelopeKind::GeometryAdd) => geometries += 1,
+            Some(EnvelopeKind::OrderUpdate) => orders += 1,
+            Some(EnvelopeKind::CameraUpdate) => cameras += 1,
             _ => {}
         }
         let consumed = record.consumed();

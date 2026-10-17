@@ -89,7 +89,7 @@ fn emit_frame() -> (Vec<EnvelopeKind>, frame::Emitted, usize) {
 
     let mut kinds = Vec::new();
     while let Some(record) = consumer.peek() {
-        kinds.push(record.kind);
+        kinds.push(record.kind.known().expect("a kind this build names"));
         let consumed = record.consumed();
         consumer.advance(consumed);
     }
@@ -283,9 +283,9 @@ fn a_symbol_layer_carries_its_quads_and_its_atlas() {
     let mut symbol_geometries = 0;
     let mut atlas_size = None;
     while let Some(record) = consumer.peek() {
-        match record.kind {
-            EnvelopeKind::TextureUpdate => atlas_uploads += 1,
-            EnvelopeKind::GeometryAdd => {
+        match record.kind.known() {
+            Some(EnvelopeKind::TextureUpdate) => atlas_uploads += 1,
+            Some(EnvelopeKind::GeometryAdd) => {
                 use tessella_capture_abi::envelope::{GeometryAdd, WireRecord as _};
                 if let Some(add) = GeometryAdd::from_bytes(record.record)
                     && add.builtin_shader == tessella_capture_abi::BuiltIn::SymbolSDFShader as i32
@@ -297,7 +297,7 @@ fn a_symbol_layer_carries_its_quads_and_its_atlas() {
                     );
                 }
             }
-            EnvelopeKind::UboUpdate => {
+            Some(EnvelopeKind::UboUpdate) => {
                 use tessella_capture_abi::envelope::{UboUpdate, WireRecord as _};
                 if let Some(update) = UboUpdate::from_bytes(record.record)
                     && update.slot
@@ -404,13 +404,13 @@ fn a_raster_layer_carries_its_quad_and_its_picture() {
     let mut uploaded: Vec<u64> = Vec::new();
     let mut upload_seen_first = true;
     while let Some(record) = consumer.peek() {
-        match record.kind {
-            EnvelopeKind::TextureUpdate => {
+        match record.kind.known() {
+            Some(EnvelopeKind::TextureUpdate) => {
                 if let Some(update) = TextureUpdate::from_bytes(record.record) {
                     uploaded.push(update.texture.0);
                 }
             }
-            EnvelopeKind::GeometryAdd => {
+            Some(EnvelopeKind::GeometryAdd) => {
                 if let Some(add) = GeometryAdd::from_bytes(record.record)
                     && add.builtin_shader == tessella_capture_abi::BuiltIn::RasterShader as i32
                 {

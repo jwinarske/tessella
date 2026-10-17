@@ -181,13 +181,13 @@ impl Held {
                 let hex: String = record.record.iter().map(|b| format!("{b:02x}")).collect();
                 println!(
                     "RECORD {frame} {map} {} {} {} {:016x} {hex}",
-                    kind_name(record.kind),
+                    kind_name(record.kind.known().expect("a kind this build names")),
                     record.record.len(),
                     record.payload.len(),
                     one.0
                 );
             }
-            stream.bytes(&(record.kind as u16).to_le_bytes());
+            stream.bytes(&record.kind.raw().to_le_bytes());
             stream.u32(u32::try_from(record.record.len()).expect("a record fits a u32"));
             // The camera is carried whole rather than hashed: its doubles come from the
             // platform's libm, which wasm's does not match in the last bits. `trace.js` says why.

@@ -54,15 +54,16 @@ pub struct Progress {
     pub records: u64,
     /// Records whose kind this build does not know.
     ///
-    /// Zero, and reachable by nothing as of the mesh envelope being read: every kind the ABI
-    /// defines is dispatched. Kept rather than removed because the question it answers is a real
-    /// one -- a stream that is *mostly* unknown is a version mismatch presenting as a blank map,
-    /// and a blank map has many other explanations -- and because the ABI is revisioned, so the
-    /// set it counts is empty rather than closed.
+    /// Not an error: the ABI is revisioned and a newer producer may send a kind this consumer
+    /// predates. Counted rather than ignored, because a stream that is *mostly* unknown is a
+    /// version mismatch presenting as a blank map, and a blank map has many other explanations.
     ///
-    /// What it does *not* count is the case its name suggests: a kind a newer producer sends and
-    /// this build predates never reaches the host at all. `Consumer::peek` refuses the record and
-    /// the read stops there, which is a stall rather than a count. tessella#423.
+    /// Every kind the ABI *defines* is dispatched, so this counts exactly the newer-producer
+    /// case. It used to count neither: `peek` resolved the kind itself and refused the record,
+    /// which is how the ring says nothing to read, so such a stream stopped at that record
+    /// instead of carrying on without it. tessella#423, and
+    /// [`RecordKind`](tessella_capture_abi::ring::RecordKind) now carries the raw discriminant
+    /// through.
     pub unknown: u64,
     /// Records naming a view that was never declared, and were dropped for it.
     ///
@@ -429,9 +430,17 @@ impl Host {
                 break;
             };
             let consumed = record.consumed();
-            let outcome = self.dispatch(record.kind, record.record, record.payload, at);
+            // A kind this build does not know is counted and skipped, which is the whole of
+            // `Progress::unknown`: the record's framing was checked before its kind, so `consumed`
+            // is sound and the next record is reachable. Dispatching nothing for it is right --
+            // there is nothing here that could read it -- and stopping would be wrong.
+            let outcome = match record.kind.known() {
+                Some(kind) => self.dispatch(kind, record.record, record.payload, at),
+                None => Outcome::Unknown,
+            };
             match outcome {
                 Outcome::Read => {}
+                Outcome::Unknown => did.unknown += 1,
                 Outcome::Malformed => did.malformed += 1,
                 Outcome::Undeclared => did.undeclared += 1,
                 Outcome::Unsupported => did.unsupported += 1,
@@ -959,6 +968,11 @@ impl Host {
 /// What dispatching one record did.
 enum Outcome {
     Read,
+    /// The record's kind is not one this build defines, so nothing could be dispatched for it.
+    ///
+    /// Counted and skipped rather than refused: see [`Progress::unknown`] and
+    /// [`RecordKind`](tessella_capture_abi::ring::RecordKind).
+    Unknown,
     Malformed,
     /// The record parsed and named a view that was never declared.
     Undeclared,

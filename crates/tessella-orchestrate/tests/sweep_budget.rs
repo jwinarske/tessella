@@ -274,7 +274,7 @@ fn four_view_sweep_budget() {
         // The consumer's tick: drain everything this frame produced.
         while let Some(record) = consumer.peek() {
             let (consumed, kind) = (record.consumed(), record.kind);
-            assert!(kind as u32 > 0, "a drained record must name a kind");
+            assert!(kind.raw() > 0, "a drained record must name a kind");
             consumer.advance(consumed);
             drained += 1;
         }

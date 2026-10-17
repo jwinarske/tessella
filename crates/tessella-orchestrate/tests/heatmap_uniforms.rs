@@ -599,8 +599,8 @@ fn each_heatmap_layer_emits_a_quad_bound_into_the_map() {
     let mut uses: Vec<(u64, u32, i32)> = Vec::new();
     while let Some(record) = consumer.peek() {
         let consumed = record.consumed();
-        match record.kind {
-            EnvelopeKind::GeometryAdd => {
+        match record.kind.known() {
+            Some(EnvelopeKind::GeometryAdd) => {
                 if let Some(add) = GeometryAdd::from_bytes(record.record) {
                     announced.push((
                         add.geometry.0,
@@ -609,7 +609,7 @@ fn each_heatmap_layer_emits_a_quad_bound_into_the_map() {
                     ));
                 }
             }
-            EnvelopeKind::ViewUse => {
+            Some(EnvelopeKind::ViewUse) => {
                 if let Some(use_record) = ViewUse::from_bytes(record.record) {
                     uses.push((
                         use_record.geometry.0,

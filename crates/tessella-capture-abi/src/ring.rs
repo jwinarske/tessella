@@ -538,11 +538,68 @@ impl Producer {
     }
 }
 
+/// What a record says it is.
+///
+/// Two cases rather than one, because an unknown kind is not corruption: the ABI is revisioned
+/// and a producer one revision ahead sends kinds a consumer predates. The framing is validated
+/// before the kind is read -- `total_len`, `record_len` and `payload_len` against the published
+/// bytes and the capacity -- so the length of a record whose kind means nothing here is still
+/// known to be sound, and skipping exactly it is safe.
+///
+/// Handing it back is the point. [`Consumer::peek`] used to resolve the kind itself and return
+/// `None` when it could not, which is also how the ring says *nothing to read*: a record whose
+/// kind this build did not know stopped the stream at that record, for good, with no counter
+/// moved and nothing said. A consumer one revision behind its producer did not degrade -- it
+/// stopped. tessella#423.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordKind {
+    /// A kind this build knows.
+    Known(EnvelopeKind),
+    /// The raw discriminant of one it does not.
+    Unknown(u16),
+}
+
+impl RecordKind {
+    /// The kind, or `None` for one this build does not know.
+    ///
+    /// A caller that writes `let Some(kind) = record.kind.known() else { .. }` has to say what
+    /// the `else` does, and the only safe answer is to skip the record and go on: dropping the
+    /// `None` on the floor without advancing is the stall this type exists to end.
+    #[must_use]
+    pub const fn known(self) -> Option<EnvelopeKind> {
+        match self {
+            Self::Known(kind) => Some(kind),
+            Self::Unknown(_) => None,
+        }
+    }
+
+    /// The discriminant as it arrived, known or not.
+    ///
+    /// What a recorder wants: a capture carries the number the producer wrote, so a stream read
+    /// by a build that predates one of its kinds still writes a file a later build can read.
+    #[must_use]
+    pub const fn raw(self) -> u16 {
+        match self {
+            Self::Known(kind) => kind as u16,
+            Self::Unknown(raw) => raw,
+        }
+    }
+}
+
+/// Comparing a record's kind against one this build names, which is a question rather than a
+/// dispatch: an unknown kind answers no to every one of them, and a caller asking *which* kind it
+/// is has to go through [`RecordKind::known`] and say what it does with the answer.
+impl PartialEq<EnvelopeKind> for RecordKind {
+    fn eq(&self, other: &EnvelopeKind) -> bool {
+        matches!(self, Self::Known(kind) if kind == other)
+    }
+}
+
 /// A record borrowed from the ring, valid until the consumer advances past it.
 #[derive(Debug, Clone, Copy)]
 pub struct Record<'a> {
-    /// What kind of envelope this is.
-    pub kind: EnvelopeKind,
+    /// What kind of envelope this is, or the raw discriminant of one this build does not know.
+    pub kind: RecordKind,
     /// The fixed envelope struct's bytes.
     pub record: &'a [u8],
     /// The payload region its spans address.
@@ -633,7 +690,13 @@ impl Consumer {
         {
             return None;
         }
-        let kind = EnvelopeKind::from_repr(header.kind)?;
+        // Not `?`: a kind this build does not know is handed back rather than refused, for the
+        // reason [`RecordKind`] gives. Everything the consumer needs to skip it -- the length --
+        // was checked above.
+        let kind = match EnvelopeKind::from_repr(header.kind) {
+            Some(known) => RecordKind::Known(known),
+            None => RecordKind::Unknown(header.kind),
+        };
 
         let record_at = offset + size_of::<RecordHeader>();
         let payload_at = record_at + align_up(record_len, 8);
@@ -733,7 +796,7 @@ mod tests {
     fn expect(consumer: &mut Consumer, kind: EnvelopeKind, record: &[u8], payload: &[u8]) {
         let consumed = {
             let got = consumer.peek().expect("a record");
-            assert_eq!(got.kind, kind);
+            assert_eq!(got.kind, RecordKind::Known(kind));
             assert_eq!(got.record, record);
             assert_eq!(got.payload, payload);
             got.consumed()
@@ -955,7 +1018,7 @@ mod tests {
                             std::thread::yield_now();
                             continue;
                         };
-                        assert_eq!(got.kind, EnvelopeKind::GeometryAdd);
+                        assert_eq!(got.kind, RecordKind::Known(EnvelopeKind::GeometryAdd));
                         assert_eq!(got.record, next.to_le_bytes());
                         assert_eq!(got.payload.len(), (next % 97) as usize);
                         assert!(got.payload.iter().all(|&b| b == next as u8));
@@ -967,5 +1030,81 @@ mod tests {
                 assert_eq!(consumer.occupancy(), 0);
             });
         });
+    }
+
+    /// A kind this build does not know is handed back, skipped, and the stream goes on.
+    ///
+    /// The forged record is what a producer one revision ahead sends: sound framing, a
+    /// discriminant no `EnvelopeKind` names. `peek` used to resolve the kind itself and return
+    /// `None`, which is also how it says *nothing to read* -- so the consumer stopped at that
+    /// record and never reached the one after it. tessella#423.
+    ///
+    /// The record after it is the assertion that matters. A consumer that reported the unknown
+    /// kind and then stalled anyway would satisfy everything else here.
+    #[test]
+    fn an_unknown_kind_is_handed_back_and_skipped() {
+        const NEWER: u16 = 4242;
+        let mut region = Region::new(1024);
+        let (mut producer, mut consumer) = region.open();
+
+        // A record this build cannot name, written by hand because `Producer::write` takes an
+        // `EnvelopeKind` and the whole point is a kind that is not one.
+        let record = [7u8; 8];
+        let total = record_size(record.len(), 0);
+        let header = RecordHeader {
+            kind: NEWER,
+            flags: 0,
+            record_len: record.len() as u32,
+            payload_len: 0,
+            total_len: total as u32,
+        };
+        // SAFETY: the region is `region_size(1024)` bytes and nothing else is writing it; the
+        // header and record fit in the first `total` bytes of the data region, which is where a
+        // producer at head zero would put them.
+        unsafe {
+            let data = data_of(region.base());
+            core::ptr::copy_nonoverlapping(
+                (&raw const header).cast::<u8>(),
+                data,
+                size_of::<RecordHeader>(),
+            );
+            core::ptr::copy_nonoverlapping(
+                record.as_ptr(),
+                data.add(size_of::<RecordHeader>()),
+                record.len(),
+            );
+            control(region.base())
+                .head
+                .store(total as u64, Ordering::Release);
+        }
+
+        let consumed = {
+            let got = consumer
+                .peek()
+                .expect("the record is handed back, not refused");
+            assert_eq!(
+                got.kind,
+                RecordKind::Unknown(NEWER),
+                "the raw discriminant is what a later build would need"
+            );
+            assert_eq!(got.kind.known(), None, "and it names no kind here");
+            assert_eq!(got.kind.raw(), NEWER);
+            assert!(
+                got.kind != EnvelopeKind::GeometryAdd,
+                "an unknown kind answers no to every known one"
+            );
+            assert_eq!(
+                got.record, &record,
+                "with its bytes, for whoever can read them"
+            );
+            got.consumed()
+        };
+        consumer.advance(consumed);
+
+        // And the stream carries on: this is the record the stall used to hide.
+        producer
+            .write(EnvelopeKind::CameraUpdate, &[9u8; 16], &[])
+            .expect("room");
+        expect(&mut consumer, EnvelopeKind::CameraUpdate, &[9u8; 16], &[]);
     }
 }

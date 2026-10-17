@@ -1739,3 +1739,85 @@ fn a_removal_drops_a_mesh_too() {
         "and the order still names it, so this is what stops it being drawn"
     );
 }
+
+/// A kind this build predates is counted and skipped, and what follows it still draws.
+///
+/// The record is written by hand because the point is a discriminant no `EnvelopeKind` names, and
+/// `Producer::write` takes one. Its framing is a producer's: a header whose lengths agree with the
+/// bytes, at the offset a producer at head zero would use.
+///
+/// `peek` used to resolve the kind itself and return `None` for one it did not know, which is
+/// also how the ring says *nothing to read* -- so a consumer one revision behind its producer did
+/// not degrade, it stopped, at that record, with `Progress::unknown` never moved. The frame behind
+/// the forged record is what says the stall is gone; the counter alone would not. tessella#423.
+#[test]
+fn a_kind_this_build_predates_is_counted_and_skipped() {
+    use core::sync::atomic::Ordering;
+    use tessella_capture_abi::ring::{RecordHeader, RingControl, record_size, region_size};
+
+    const NEWER: u16 = 4242;
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: sized by `region_size`, eight-aligned as a `Vec<u64>`, outlives both halves.
+    let (producer, consumer) =
+        unsafe { tessella_capture_abi::ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+    let mut producer = producer;
+    let mut consumer = consumer;
+
+    let forged = [3u8; 8];
+    let total = record_size(forged.len(), 0);
+    let header = RecordHeader {
+        kind: NEWER,
+        flags: 0,
+        record_len: u32::try_from(forged.len()).unwrap(),
+        payload_len: 0,
+        total_len: u32::try_from(total).unwrap(),
+    };
+    // SAFETY: the region is `region_size(CAPACITY)` bytes and nothing else writes it yet. The
+    // header and its record go in the first `total` bytes of the data region, which is where a
+    // producer at head zero puts them, and the head is published after they are written.
+    unsafe {
+        let base = region.as_mut_ptr().cast::<u8>();
+        let data = base.add(core::mem::size_of::<RingControl>());
+        core::ptr::copy_nonoverlapping(
+            (&raw const header).cast::<u8>(),
+            data,
+            core::mem::size_of::<RecordHeader>(),
+        );
+        core::ptr::copy_nonoverlapping(
+            forged.as_ptr(),
+            data.add(core::mem::size_of::<RecordHeader>()),
+            forged.len(),
+        );
+        (*base.cast::<RingControl>())
+            .head
+            .store(total as u64, Ordering::Release);
+    }
+
+    // And an ordinary frame after it, written by the producer, which picks up where the forged
+    // record left the head.
+    declare(&mut producer, 0);
+    producer
+        .write(EnvelopeKind::GeometryAdd, geometry(1, 11).as_bytes(), &[])
+        .expect("room");
+    producer
+        .write(EnvelopeKind::ViewUse, use_of(1, 0, 0).as_bytes(), &[])
+        .expect("room");
+    let (update, payload) = order(0, 1, &[entry(1, 0, 0)]);
+    producer
+        .write(EnvelopeKind::OrderUpdate, update.as_bytes(), &payload)
+        .expect("room");
+    producer
+        .write(EnvelopeKind::CameraUpdate, camera(0, 1).as_bytes(), &[])
+        .expect("room");
+
+    let mut host = Host::new();
+    let progress = host.read(&mut consumer);
+
+    assert_eq!(progress.unknown, 1, "the kind this build predates");
+    assert_eq!(progress.malformed, 0, "its framing is sound");
+    assert_eq!(progress.records, 6, "and the read did not stop at it");
+    assert!(
+        host.plan(ViewId(0)).is_some(),
+        "the frame behind the unknown record draws, which is what the stall cost"
+    );
+}
