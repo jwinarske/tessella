@@ -1060,6 +1060,73 @@ fn a_declared_view_carries_its_camera_mode() {
     assert_eq!(host.camera_mode(ViewId(3)), Some(CameraMode::Consumer));
 }
 
+/// A view that owns its camera is handed one whole, matrices and all.
+///
+/// `CameraMode::Consumer` means the consumer places its own tiles: §11.7's "a tile's placement
+/// comes from its own id and every per-drawable matrix is advisory". It cannot do that from the
+/// mode alone, and tessella#371 recorded what it was missing -- no matrices, no `center_zoom0`,
+/// no bearing, no pitch, and no `pixels_per_meter`, which the field's own doc calls unobtainable
+/// from the projection: "Leave it out and buildings come out too tall by its reciprocal."
+///
+/// Each of the five is given a value nothing else in the record shares, so a camera stitched
+/// together from defaults fails rather than passes by coincidence.
+#[test]
+fn a_consumer_owned_camera_arrives_whole() {
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+
+    {
+        let (producer, _) = ring.split();
+        let record = ViewDeclare {
+            view: ViewId(0),
+            camera_mode: CameraMode::Consumer as u8,
+            _reserved: [0; 3],
+        };
+        producer
+            .write(EnvelopeKind::ViewDeclare, record.as_bytes(), &[])
+            .expect("room");
+        producer
+            .write(EnvelopeKind::GeometryAdd, geometry(1, 11).as_bytes(), &[])
+            .expect("room");
+        producer
+            .write(EnvelopeKind::ViewUse, use_of(1, 0, 0).as_bytes(), &[])
+            .expect("room");
+        let (update, payload) = order(0, 1, &[entry(1, 0, 0)]);
+        producer
+            .write(EnvelopeKind::OrderUpdate, update.as_bytes(), &payload)
+            .expect("room");
+        let mut sent = camera(0, 1);
+        sent.proj_matrix[0] = 3.5;
+        sent.proj_matrix[15] = 4.5;
+        sent.globe_matrix[0] = 5.5;
+        sent.center_zoom0 = [6.5, 7.5];
+        sent.bearing = 8.5;
+        sent.pitch = 9.5;
+        sent.pixels_per_meter = 10.5;
+        producer
+            .write(EnvelopeKind::CameraUpdate, sent.as_bytes(), &[])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+
+    assert_eq!(
+        host.camera_mode(ViewId(0)),
+        Some(CameraMode::Consumer),
+        "the view owns its camera"
+    );
+    let frame = host.plan(ViewId(0)).expect("a frame");
+    assert_eq!(frame.camera.proj_matrix[0], 3.5);
+    assert_eq!(
+        frame.camera.proj_matrix[15], 4.5,
+        "the whole matrix, not its first cell"
+    );
+    assert_eq!(frame.camera.globe_matrix[0], 5.5);
+    assert_eq!(frame.camera.center_zoom0, [6.5, 7.5]);
+    assert_eq!(frame.camera.bearing, 8.5);
+    assert_eq!(frame.camera.pitch, 9.5);
+    assert_eq!(frame.camera.pixels_per_meter, 10.5);
+}
+
 /// A camera mode this build does not know is refused rather than defaulted.
 ///
 /// The mode decides what a per-drawable matrix *means*, so guessing it is how geometry gets placed
