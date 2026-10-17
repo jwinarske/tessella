@@ -1,0 +1,386 @@
+{
+ "version": 8,
+ "name": "alignment-parity",
+ "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
+ "sources": {
+  "places": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "viewport",
+       "name": "ALPHA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3908379,
+        52.5275729
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "viewport",
+       "name": "BETA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.5275729
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "viewport",
+       "name": "GAMMA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4191621,
+        52.5275729
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "rotatemap",
+       "name": "ALPHA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3908379,
+        52.5237864
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "rotatemap",
+       "name": "BETA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.5237864
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "rotatemap",
+       "name": "GAMMA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4191621,
+        52.5237864
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "flat",
+       "name": "ALPHA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3908379,
+        52.52
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "flat",
+       "name": "BETA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.52
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "flat",
+       "name": "GAMMA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4191621,
+        52.52
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "pitchonly",
+       "name": "ALPHA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3908379,
+        52.5162136
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "pitchonly",
+       "name": "BETA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.5162136
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "pitchonly",
+       "name": "GAMMA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4191621,
+        52.5162136
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "turned",
+       "name": "ALPHA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3908379,
+        52.5124271
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "turned",
+       "name": "BETA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.5124271
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "turned",
+       "name": "GAMMA"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4191621,
+        52.5124271
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#f4f1ea"
+   }
+  },
+  {
+   "id": "viewport",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "viewport"
+   ],
+   "layout": {
+    "symbol-placement": "point",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 18,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "rotatemap",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "rotatemap"
+   ],
+   "layout": {
+    "symbol-placement": "point",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 18,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true,
+    "text-rotation-alignment": "map",
+    "text-pitch-alignment": "viewport"
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "flat",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "flat"
+   ],
+   "layout": {
+    "symbol-placement": "point",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 18,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true,
+    "text-rotation-alignment": "map",
+    "text-pitch-alignment": "map"
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "pitchonly",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "pitchonly"
+   ],
+   "layout": {
+    "symbol-placement": "point",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 18,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true,
+    "text-rotation-alignment": "viewport",
+    "text-pitch-alignment": "map"
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "turned",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "turned"
+   ],
+   "layout": {
+    "symbol-placement": "point",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 18,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true,
+    "text-rotate": 30
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  }
+ ]
+}

@@ -2303,6 +2303,13 @@ impl SymbolDrawableEntry {
         // which is what GL JS's globe does below a steep pitch and is a label that reads rather
         // than one that is absent. Laying them on the sphere is the tangent-frame work §13.4
         // describes, and is not a matrix swap.
+        // The bearing these two take is mbgl's `state.getBearing()`: radians, and *negated*
+        // against the compass degrees a camera carries -- `util::deg2rad(-*camera.bearing)`. It
+        // is the only place in the symbol UBO where the bearing is used as an angle rather than
+        // through a matrix that already has it, so it is the only place the convention shows.
+        // Passed as degrees it is both the wrong unit and the wrong way round, and a label that
+        // lies flat without turning comes out turned by nearly twice the bearing.
+        let bearing = camera::bearing_radians(view);
         let pitch_with_map = effective_pitch(alignments.pitch, surface) == Alignment::Map;
         let rotate_with_map = effective_rotation(alignments.rotation, surface) == Alignment::Map;
         let along_line = alignments.along_line(placement);
@@ -2319,13 +2326,13 @@ impl SymbolDrawableEntry {
         let plane = if along_line || variable {
             camera::identity()
         } else if pitch_with_map {
-            camera::label_plane_matrix_on_map(z, view.zoom, view.bearing, rotate_with_map)
+            camera::label_plane_matrix_on_map(z, view.zoom, bearing, rotate_with_map)
         } else {
             camera::label_plane_matrix(&tile, view.width, view.height)
         };
 
         let coord = if pitch_with_map {
-            camera::gl_coord_matrix_on_map(&tile, z, view.zoom, view.bearing, rotate_with_map)
+            camera::gl_coord_matrix_on_map(&tile, z, view.zoom, bearing, rotate_with_map)
         } else {
             camera::gl_coord_matrix(view.width, view.height)
         };

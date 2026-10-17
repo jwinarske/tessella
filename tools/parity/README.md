@@ -371,6 +371,31 @@ that.
   row of them is wide, and the rise-over-run test that chooses between the two shapings is
   measured against the frame's own aspect ratio.
 
+- `aligned_p` — what a symbol is oriented against. Two properties, `*-rotation-alignment` and
+  `*-pitch-alignment`, each viewport or map, and the four corners they make: upright on screen,
+  turned with the map but standing up, lying flat and turning with the ground, and lying flat
+  without turning. Three of the four were drawn by nothing — the consumer's own material says as
+  much, calling `rotate_symbol` and `pitch_with_map` flags "this build never exercises" — and
+  none of them is visible at a camera that has not turned or tilted, which is why four cameras
+  are the scene rather than a sample of it.
+
+  The fifth layer is `text-rotate`, the label's own turn about its own anchor, and the first row
+  of the table is the control: the same words at the same anchors with nothing asked of them.
+
+      aligned_p  z14 p0 b0     1,587 of 786,432   `text-rotate` read nowhere
+                 z14 p0 b200   1,710              and the bearing in the wrong unit and sign
+                                   0              both fixed, at all four cameras
+
+  `text-rotate` was implemented in the quad builder and connected to no property. The bearing is
+  the subtler of the two: `label_plane_matrix_on_map` takes mbgl's `state.getBearing()`, which is
+  radians and *negated* against the compass degrees a camera carries, and it was handed the
+  degrees. It is the only place in the symbol UBO where the bearing is an angle rather than
+  something a matrix already carries, so no other scene could have shown it.
+
+  An icon layer is deliberately **not** in this scene. Added back, one of its three icons is not
+  drawn, and only with four layers of particular shapes at particular cameras; see tessella#419. The
+  scene is left as the four text corners rather than tuned around that.
+
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
   then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.
