@@ -1520,6 +1520,18 @@ impl Map {
             },
             &mut self.session,
         )?;
+        // A displacement is half an operation, and this is the other half. The drawable was
+        // released so its slab could be emptied, and what re-announces it is the next frame that
+        // draws it -- so a frame that displaces anything has to ask for one. Nothing else will:
+        // the cover has not moved and no source has reported churn, which is exactly the
+        // condition `begin_frame` calls idle, so the view goes quiet holding a `ViewRelease` for
+        // a drawable the order still names. tessella#419, where one icon of three vanished in
+        // 11 of 40 runs of `aligned_p` at pitch 60 -- and in none of another 40, because the rate
+        // is whatever the arrival order happens to be. The frame that displaced it was the last
+        // one, and the picture had no next frame to repair itself in.
+        if emitted.displaced > 0 {
+            self.damage.mark_dirty(self.view_id);
+        }
         Ok(Tick::Emitted(emitted))
     }
 }

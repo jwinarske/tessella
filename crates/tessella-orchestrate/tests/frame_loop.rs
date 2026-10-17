@@ -8,6 +8,7 @@
 //! that a frame is well-formed. Whether the second frame costs anything is a different question
 //! and it is the one a running map lives or dies on.
 
+use std::cell::Cell;
 use std::sync::Arc;
 
 use tessella_capture_abi::envelope::ViewId;
@@ -1144,5 +1145,129 @@ fn zooming_out_asks_further_ahead() {
     assert!(
         into >= still.saturating_sub(1),
         "zooming in reached z{into} against z{still} standing still, so it deepened too",
+    );
+}
+
+/// A frame that displaces a drawable asks for the frame that brings it back.
+///
+/// Compaction lets a drawable go so its slab can be emptied, and what announces it again is the
+/// next frame that draws it. Nothing else asks for that frame: the cover has not moved and no
+/// source has reported churn, which is exactly the condition `begin_frame` calls idle. So a map
+/// that settles on a displacing frame is left holding a `ViewRelease` for a drawable its own
+/// order still names, and the picture is missing it until something moves — tessella#419, where
+/// one icon of three vanished in 11 of 40 runs of one scene because the frame that displaced it
+/// was the last one.
+///
+/// The slab is made sparse the way a real one goes sparse: every tile but one is re-laid-out
+/// with fewer layers, which is what a symbol tile does as its glyphs arrive, so their bytes die
+/// in a slab the unchanged tile still holds a drawable in. The arena learns that at the next
+/// frame's commit, which is why the displacement lands a frame after the churn and why this
+/// drives three.
+#[test]
+fn a_displacing_frame_is_not_the_last_one() {
+    /// Every tile answers with both layers until the switch, and then all but one answer with
+    /// one. The keeper is whichever tile was asked for first: which tile it is does not matter,
+    /// only that it does not change while the others do.
+    struct Shrinking {
+        full: Arc<Vec<LayerBucket>>,
+        shrunk: Arc<Vec<LayerBucket>>,
+        relaid: Cell<bool>,
+        keeper: Cell<Option<(u8, u32, u32)>>,
+    }
+
+    impl Tiles for Shrinking {
+        fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+            let address = (tile.z, tile.x, tile.y);
+            if !self.relaid.get() {
+                if self.keeper.get().is_none() {
+                    self.keeper.set(Some(address));
+                }
+                return Some(Arc::clone(&self.full));
+            }
+            if self.keeper.get() == Some(address) {
+                Some(Arc::clone(&self.full))
+            } else {
+                Some(Arc::clone(&self.shrunk))
+            }
+        }
+    }
+
+    let style = Style::parse(STYLE).expect("the style parses");
+    let decoded = Tile::decode(REAL_TILE).expect("the fixture decodes");
+    let full = build_mvt_tile(&style, "src", TileId::new(0, 0, 0), &decoded).expect("builds");
+    // The same tile with one layer gone, at a revision that says so: a bucket list a frame
+    // cannot tell from the one it drew would be retained rather than rebuilt.
+    let shrunk: Vec<LayerBucket> = full
+        .iter()
+        .filter(|bucket| bucket.layer_id == "banks")
+        .cloned()
+        .map(|mut bucket| {
+            bucket.data_rev = 1;
+            bucket
+        })
+        .collect();
+    assert!(
+        !shrunk.is_empty() && shrunk.len() < full.len(),
+        "the shrunk list has to be smaller and not empty"
+    );
+    let tiles = Shrinking {
+        full: Arc::new(full),
+        shrunk: Arc::new(shrunk),
+        relaid: Cell::new(false),
+        keeper: Cell::new(None),
+    };
+
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: as above.
+    let (mut producer, _consumer) =
+        unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    let mut map = Map::new(style, view(10.0), ViewId(0));
+    map.tick(&mut producer, &tiles).expect("the first frame");
+    assert_eq!(
+        map.tick(&mut producer, &tiles).expect("settled"),
+        Tick::Idle,
+        "the warm map is not settled, so what follows is measuring something else"
+    );
+
+    // The churn: all but one tile come back smaller, and their old bytes die.
+    tiles.relaid.set(true);
+    map.mark_dirty();
+    let Tick::Emitted(churned) = map.tick(&mut producer, &tiles).expect("the re-laid frame") else {
+        panic!("a re-laid tile has to emit");
+    };
+    assert!(churned.removed > 0, "nothing was let go: {churned:?}");
+
+    // The frame that sees the sparse slab and empties it. One more tick with the churn reported
+    // again, because the arena's bytes move at the previous frame's commit.
+    map.mark_dirty();
+    let Tick::Emitted(compacted) = map
+        .tick(&mut producer, &tiles)
+        .expect("the compacting frame")
+    else {
+        panic!("the frame after the churn has to emit");
+    };
+    assert!(
+        compacted.displaced > 0,
+        "nothing was poorly enough packed to displace, so this asserts nothing: {compacted:?}"
+    );
+
+    // And now nothing is marked and the camera has not moved. The tick still has to emit,
+    // because the displacement is the work outstanding, and it has to bring back what was let go.
+    let after = map
+        .tick(&mut producer, &tiles)
+        .expect("the frame after a displacement");
+    let Tick::Emitted(emitted) = after else {
+        panic!(
+            "a displacing frame left the map idle: {} drawable(s) released and nothing to \
+             announce them again",
+            compacted.displaced
+        );
+    };
+    assert!(
+        emitted.geometries >= compacted.displaced,
+        "the frame after a displacement announced {} geometries for {} displaced",
+        emitted.geometries,
+        compacted.displaced
     );
 }

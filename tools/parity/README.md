@@ -383,7 +383,7 @@ that.
   of the table is the control: the same words at the same anchors with nothing asked of them.
 
       aligned_p  z14 p0 b0     1,587 of 786,432   `text-rotate` read nowhere
-                 z14 p0 b200   1,710              and the bearing in the wrong unit and sign
+                 z14 p0 b200   3,040              and the bearing in the wrong unit and sign
                                    0              both fixed, at all four cameras
 
   `text-rotate` was implemented in the quad builder and connected to no property. The bearing is
@@ -392,9 +392,16 @@ that.
   degrees. It is the only place in the symbol UBO where the bearing is an angle rather than
   something a matrix already carries, so no other scene could have shown it.
 
-  An icon layer is deliberately **not** in this scene. Added back, one of its three icons is not
-  drawn, and only with four layers of particular shapes at particular cameras; see tessella#419. The
-  scene is left as the four text corners rather than tuned around that.
+  The sixth layer is an icon row at `icon-size: 2` — the second corner's icon counterpart, and
+  the only thing in the sweep that draws an icon at all. It was left out of the scene for a
+  while, because one of its three icons would sometimes not be drawn; what that cost is
+  tessella#419. The icon was in the one tile that also carries six labels, and the displacement
+  DR-21's compaction makes — a drawable let go so its slab can be emptied, to be announced again
+  by the next frame that draws it — landed in the *last* frame. A settled map has no next frame,
+  so the release went out and nothing brought it back. Eleven runs of forty at one sitting and
+  none of forty at another, 1,084 pixels when it happened and 0 when it did not — which is why a
+  single run of a scene can only ever tell you that it passed once. The ablations that first read
+  "it needs all four layers of particular shapes" were each one run.
 
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
