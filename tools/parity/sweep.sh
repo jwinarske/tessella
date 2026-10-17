@@ -160,6 +160,18 @@ for args in "14 1024 1024 0 0" "14 1024 1024 60 0" "14 1024 1024 0 200" "15 1024
   bash "$P/parity.sh" vertical_p 52.52 13.405 $args
 done
 
+# What a symbol is oriented against, which is two properties and four corners: `*-rotation-
+# alignment` and `*-pitch-alignment`, each viewport or map. Three of the four are drawn by
+# nothing else in the tree -- the materials' own comment says `rotate_symbol` and `pitch_with_map`
+# are flags "this build never exercises" -- and they are only visible at a camera that has turned
+# or tilted, which is why the four cameras here are the scene rather than a sample of it.
+#
+# The fifth layer is `text-rotate`, the label's own turn, which was read nowhere at all.
+for args in "14 1024 768 0 0" "14 1024 768 60 0" "14 1024 768 0 200" "14 1024 768 60 200"; do
+  # shellcheck disable=SC2086 # five words by construction: zoom, width, height, pitch, bearing
+  bash "$P/parity.sh" aligned_p 52.52 13.405 $args
+done
+
 # And the other three families' offsets, which no example style writes either. Not zero: the line
 # half leaves about 130 pixels along one tile edge, and the note in `paint_translate` says what is
 # known about that. Circle and fill-extrusion are exact, and the number is here so a change in it

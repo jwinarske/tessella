@@ -465,6 +465,12 @@ pub struct SymbolOptions {
     pub variable_offset: [f32; 2],
     /// Whether [`Self::variable_offset`] is a radial distance rather than a vector.
     pub variable_radial: bool,
+    /// `text-rotate`, in radians.
+    ///
+    /// The label's own turn, about its anchor, on top of whatever the camera does: a shield
+    /// angled to its road. mbgl applies it in `getGlyphQuads` to the corners of every quad, after
+    /// a vertical glyph has been turned upright and before the pixel offsets are added.
+    pub rotate: f32,
     /// Where the label sits relative to its anchor.
     pub anchor: tessella_glyph::shaping::Anchor,
     /// `text-offset`, converted from the spec's ems to the shaping's units.
@@ -497,6 +503,7 @@ impl Default for SymbolOptions {
             max_width_ems: 10.0,
             letter_spacing: 0.0,
             line_height_ems: 1.2,
+            rotate: 0.0,
             anchor: tessella_glyph::shaping::Anchor::Center,
             offset: [0.0, 0.0],
             variable_offset: [0.0, 0.0],
@@ -827,6 +834,7 @@ pub fn build_symbols_with<G: Glyphs + ?Sized>(
         let before = buffers.glyphs();
         let horizontal = quads::Options {
             text_offset: options.offset,
+            text_rotate: options.rotate,
             allow_vertical_placement: options.allow_vertical_placement,
             ..quads::Options::default()
         };
@@ -1209,13 +1217,13 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
         // as a point label does.
         let quad_options = quads::Options {
             along_line: options.along_line,
+            text_rotate: options.symbol.rotate,
             text_offset: if options.along_line {
                 [0.0, 0.0]
             } else {
                 options.symbol.offset
             },
             allow_vertical_placement: options.symbol.allow_vertical_placement,
-            ..quads::Options::default()
         };
 
         // Shaped once; emitted once per anchor.

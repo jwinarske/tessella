@@ -584,6 +584,10 @@ fn text_options(
             variable.unwrap_or(plain),
         ),
         max_width_ems: number("text-max-width").unwrap_or(10.0),
+        // `text-rotate`, in degrees on the wire and radians in the quad builder -- mbgl's
+        // `util::deg2radf(layout.get<TextRotate>())`, read per feature as every other layout
+        // property here is.
+        rotate: number("text-rotate").unwrap_or(0.0).to_radians(),
         // `text-letter-spacing` is in ems and everything downstream of it is in pixels, so it
         // is resolved here where the unit changes rather than carried in the spec's unit and
         // multiplied wherever it happens to be read. mbgl does the same, one line above its
