@@ -30,7 +30,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{
-    AttributeDesc, GeometryAdd, GeometryId, Segment, TextureRef, ViewId, ViewUse,
+    AttributeDesc, GeometryAdd, GeometryId, MeshAdd, Segment, TextureRef, ViewId, ViewUse,
 };
 
 /// The shared half of a drawable, held until a view uses it.
@@ -54,6 +54,31 @@ pub struct Announcement {
     pub texture_refs: Vec<TextureRef>,
 }
 
+/// The shared half of an authored mesh, held until a view uses it.
+///
+/// A `MeshAdd` rather than a `GeometryAdd`, and so not an [`Announcement`]: a model tile arrives
+/// authored and there is no mbgl family for a PBR mesh, so there are no attributes to describe, no
+/// segments and no shader to name. What it carries is where the bytes are and what they are.
+///
+/// Its id is in the same space as a geometry's, which is what lets a `ViewUse` bind it, a
+/// `ViewRelease` release it and a `GeometryRemove` drop it with no record of their own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mesh {
+    /// The record as it arrived.
+    pub add: MeshAdd,
+    /// Ring position just past this announcement, read the way [`Announcement::announced_at`] is.
+    pub announced_at: u64,
+}
+
+/// A mesh a view draws: the asset and that view's placement of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeshDrawable<'a> {
+    /// The shared half.
+    pub mesh: &'a Mesh,
+    /// The per-view half, which carries the layer, the tile and the draw flags.
+    pub use_: &'a ViewUse,
+}
+
 /// A drawable: what every view shares, and what one view adds.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Drawable<'a> {
@@ -70,6 +95,13 @@ pub struct Drawable<'a> {
 #[derive(Debug, Clone, Default)]
 pub struct Joiner {
     geometry: BTreeMap<GeometryId, Announcement>,
+    /// Authored meshes, in the same id space as `geometry` and never both.
+    ///
+    /// A separate map rather than an enum in one, because every reader of `geometry` wants the
+    /// attributes and the shader a mesh does not have: folded together, each would have to ask
+    /// which kind it got before it could use the answer. Kept in the same id space, which is the
+    /// ABI's own choice, so `uses` serves both.
+    meshes: BTreeMap<GeometryId, Mesh>,
     /// One entry per (geometry, view), latest winning within a view.
     ///
     /// Keyed by the pair rather than by the geometry with a `Vec` of uses behind it. That shape
@@ -100,6 +132,36 @@ impl Joiner {
         self.range(id).map(|(_, use_)| use_.view)
     }
 
+    /// Takes a mesh announcement, and reports every view that already uses it.
+    ///
+    /// The same shape as [`Self::announce`] and for the same reason: a use arrives once and is
+    /// durable, so a view may be holding one before the asset it names has been announced.
+    pub fn announce_mesh(&mut self, mesh: Mesh) -> impl Iterator<Item = ViewId> + '_ {
+        let id = mesh.add.mesh;
+        self.meshes.insert(id, mesh);
+        self.range(id).map(|(_, use_)| use_.view)
+    }
+
+    /// The mesh an id names, if one was announced.
+    #[must_use]
+    pub fn mesh(&self, id: GeometryId) -> Option<&Mesh> {
+        self.meshes.get(&id)
+    }
+
+    /// The mesh a view draws for this id, if both halves are in.
+    #[must_use]
+    pub fn mesh_drawable(&self, id: GeometryId, view: ViewId) -> Option<MeshDrawable<'_>> {
+        let mesh = self.meshes.get(&id)?;
+        let use_ = self.uses.get(&(id, view))?;
+        Some(MeshDrawable { mesh, use_ })
+    }
+
+    /// How many meshes are held.
+    #[must_use]
+    pub fn meshes(&self) -> usize {
+        self.meshes.len()
+    }
+
     /// Takes a view's use of a geometry.
     ///
     /// Returns whether it can be drawn now — that is, whether its announcement has arrived. A use
@@ -107,7 +169,9 @@ impl Joiner {
     /// announce it later, and the use is durable.
     pub fn used(&mut self, use_: ViewUse) -> bool {
         self.uses.insert((use_.geometry, use_.view), use_);
-        self.geometry.contains_key(&use_.geometry)
+        // Either kind: the id space is one, and a use that named a mesh is as drawable as a use
+        // that named geometry -- see [`Mesh`].
+        self.geometry.contains_key(&use_.geometry) || self.meshes.contains_key(&use_.geometry)
     }
 
     /// The drawable a view draws for this geometry, if both halves are in.
@@ -188,7 +252,10 @@ impl Joiner {
         for view in views {
             self.uses.remove(&(geometry, view));
         }
-        self.geometry.remove(&geometry).is_some()
+        // One id space, one removal record: `GeometryRemove` drops a mesh exactly as it drops
+        // geometry, which is what the ABI says of a mesh's id.
+        let had_geometry = self.geometry.remove(&geometry).is_some();
+        self.meshes.remove(&geometry).is_some() || had_geometry
     }
 
     /// How many geometries are held.

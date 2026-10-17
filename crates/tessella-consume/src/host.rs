@@ -34,16 +34,16 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{
-    AttributeDesc, CameraUpdate, Extent, GeometryAdd, GeometryRemove, OrderEntry, OrderEpoch,
-    OrderUpdate, Segment, Span, StencilTile, StencilTiles, TextureId, TextureRef, TextureUpdate,
-    TileId, UboUpdate, ViewDeclare, ViewId, ViewRelease, ViewTarget, ViewUndeclare, ViewUse,
-    WireRecord,
+    AttributeDesc, CameraUpdate, Extent, GeometryAdd, GeometryRemove, MeshAdd, MeshFormat,
+    OrderEntry, OrderEpoch, OrderUpdate, Segment, Span, StencilTile, StencilTiles, TextureId,
+    TextureRef, TextureUpdate, TileId, UboUpdate, ViewDeclare, ViewId, ViewRelease, ViewTarget,
+    ViewUndeclare, ViewUse, WireRecord,
 };
 use tessella_capture_abi::ring::Consumer;
 use tessella_capture_abi::{CameraMode, EnvelopeKind, TextureChannelDataType, TexturePixelType};
 
-use crate::batch::{Batches, Program, collapse_into};
-use crate::join::{Announcement, Joiner};
+use crate::batch::{AUTHORED_MESH, Batches, Program, collapse_into};
+use crate::join::{Announcement, Joiner, Mesh};
 use crate::stencil::{self, Partition};
 use crate::upload::{self, Uploads};
 
@@ -54,9 +54,15 @@ pub struct Progress {
     pub records: u64,
     /// Records whose kind this build does not know.
     ///
-    /// Not an error: the ABI is revisioned and a newer producer may send a kind this consumer
-    /// predates. Counted rather than ignored, because a stream that is *mostly* unknown is a
-    /// version mismatch presenting as a blank map, and a blank map has many other explanations.
+    /// Zero, and reachable by nothing as of the mesh envelope being read: every kind the ABI
+    /// defines is dispatched. Kept rather than removed because the question it answers is a real
+    /// one -- a stream that is *mostly* unknown is a version mismatch presenting as a blank map,
+    /// and a blank map has many other explanations -- and because the ABI is revisioned, so the
+    /// set it counts is empty rather than closed.
+    ///
+    /// What it does *not* count is the case its name suggests: a kind a newer producer sends and
+    /// this build predates never reaches the host at all. `Consumer::peek` refuses the record and
+    /// the read stops there, which is a stall rather than a count. tessella#423.
     pub unknown: u64,
     /// Records naming a view that was never declared, and were dropped for it.
     ///
@@ -426,7 +432,6 @@ impl Host {
             let outcome = self.dispatch(record.kind, record.record, record.payload, at);
             match outcome {
                 Outcome::Read => {}
-                Outcome::Unknown => did.unknown += 1,
                 Outcome::Malformed => did.malformed += 1,
                 Outcome::Undeclared => did.undeclared += 1,
                 Outcome::Unsupported => did.unsupported += 1,
@@ -516,6 +521,21 @@ impl Host {
             let joiner = &self.joiner;
             let mut announced_through = 0;
             collapse_into(&order.entries, batches, |id| {
+                // A mesh first, because the two id spaces are one and a mesh has no announcement
+                // to find: `drawable` would report it missing and the order entry would be
+                // skipped, which is a model layer silently not drawn.
+                if let Some(drawable) = joiner.mesh_drawable(id, view) {
+                    announced_through = announced_through.max(drawable.mesh.announced_at);
+                    return Some(Program {
+                        builtin_shader: AUTHORED_MESH,
+                        // Nothing data-driven: the asset is the program's input, and what the
+                        // producer contributes is the transform, which travels as a `UboUpdate`
+                        // like every other layer's.
+                        permutation_key: 0,
+                        draw_flags: drawable.use_.draw_flags.bits(),
+                        texture_refs: &[],
+                    });
+                }
                 let drawable = joiner.drawable(id, view)?;
                 announced_through = announced_through.max(drawable.geometry.announced_at);
                 Some(Program {
@@ -697,6 +717,31 @@ impl Host {
                 };
                 // Every view already holding it now draws something else.
                 let touched: alloc::vec::Vec<ViewId> = self.joiner.announce(announcement).collect();
+                self.stale.extend(touched);
+                Outcome::Read
+            }
+            EnvelopeKind::MeshAdd => {
+                let Some(add) = MeshAdd::from_bytes(bytes) else {
+                    return Outcome::Malformed;
+                };
+                // The format decides how the bytes are read, so a value this build does not know
+                // is refused rather than guessed at -- the ABI says as much of this field: "a
+                // consumer reading a value it does not know must skip the mesh rather than guess
+                // at the bytes". The same answer every other discriminant on this wire gets.
+                //
+                // Nothing is stored for a refused mesh, so a `ViewUse` naming it plans nothing,
+                // which is the whole point: a model drawn from bytes read as the wrong format is
+                // worse than a model not drawn.
+                if MeshFormat::from_repr(add.format).is_none() {
+                    return Outcome::Unsupported;
+                }
+                let touched: alloc::vec::Vec<ViewId> = self
+                    .joiner
+                    .announce_mesh(Mesh {
+                        add,
+                        announced_at: at,
+                    })
+                    .collect();
                 self.stale.extend(touched);
                 Outcome::Read
             }
@@ -907,7 +952,6 @@ impl Host {
                     Outcome::Read
                 })
             }
-            _ => Outcome::Unknown,
         }
     }
 }
@@ -915,7 +959,6 @@ impl Host {
 /// What dispatching one record did.
 enum Outcome {
     Read,
-    Unknown,
     Malformed,
     /// The record parsed and named a view that was never declared.
     Undeclared,

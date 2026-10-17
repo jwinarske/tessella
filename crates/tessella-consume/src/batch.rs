@@ -184,6 +184,16 @@ pub struct Program<'a> {
     pub texture_refs: &'a [TextureRef],
 }
 
+/// What [`Key::builtin_shader`] carries for an authored mesh.
+///
+/// Not an mbgl family, because there is no family for a PBR mesh: the asset arrives authored and
+/// the consumer's own loader reads it. Negative, so it cannot collide with a `BuiltIn` -- every
+/// one of those is a non-negative discriminant -- and one value rather than one per asset, because
+/// what a batch key decides is the program, and every mesh in a layer is drawn by the same one.
+///
+/// A consumer meeting it looks the id up with `Joiner::mesh` rather than `Joiner::drawable`.
+pub const AUTHORED_MESH: i32 = -1;
+
 /// Whether a family is excluded from collapse.
 ///
 /// Symbols, per R-9, until the collapse is measured: their cross-tile sort keys are the case that
