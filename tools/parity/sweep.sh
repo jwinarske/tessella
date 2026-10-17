@@ -166,7 +166,10 @@ done
 # are flags "this build never exercises" -- and they are only visible at a camera that has turned
 # or tilted, which is why the four cameras here are the scene rather than a sample of it.
 #
-# The fifth layer is `text-rotate`, the label's own turn, which was read nowhere at all.
+# The fifth layer is `text-rotate`, the label's own turn, which was read nowhere at all. The
+# sixth is an icon row at `icon-size: 2`, which is the second corner's icon counterpart and the
+# only thing in the sweep that draws one: it is here because leaving it out hid tessella#419, an
+# icon that went missing in 11 of 40 runs of this scene at pitch 60.
 for args in "14 1024 768 0 0" "14 1024 768 60 0" "14 1024 768 0 200" "14 1024 768 60 200"; do
   # shellcheck disable=SC2086 # five words by construction: zoom, width, height, pitch, bearing
   bash "$P/parity.sh" aligned_p 52.52 13.405 $args
