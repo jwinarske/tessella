@@ -5,14 +5,16 @@
 
 use tessella_capture_abi::envelope::DrawFlags;
 use tessella_capture_abi::envelope::{
-    CameraUpdate, Extent, GeometryAdd, GeometryId, GeometryRemove, OrderEntry, OrderEpoch,
-    OrderUpdate, Span, StencilTile, StencilTiles, TextureId, TileId, ViewDeclare, ViewId,
-    ViewRelease, ViewTarget, ViewUndeclare, ViewUse, WireRecord,
+    AddReason, CameraUpdate, Extent, GeometryAdd, GeometryId, GeometryRemove, MeshAdd, MeshFormat,
+    OrderEntry, OrderEpoch, OrderUpdate, SlabRef, Span, StencilTile, StencilTiles, TextureId,
+    TileId, ViewDeclare, ViewId, ViewRelease, ViewTarget, ViewUndeclare, ViewUse, WireRecord,
 };
+use tessella_capture_abi::generated::mbgl_enums::BuiltIn;
 use tessella_capture_abi::ring::{Producer, Ring};
 use tessella_capture_abi::{
     CameraMode, EnvelopeKind, ProjectionMode, RenderPass, TextureChannelDataType, TexturePixelType,
 };
+use tessella_consume::batch::AUTHORED_MESH;
 use tessella_consume::host::Host;
 
 const CAPACITY: usize = 1 << 16;
@@ -32,6 +34,21 @@ fn geometry(id: u64, shader: i32) -> GeometryAdd {
         reason: 0,
         topology: 0,
         _pad: [0; 1],
+    }
+}
+
+/// An authored mesh, as the producer announces one: an id in the geometry space and a slab.
+fn mesh(id: u64, format: u8) -> MeshAdd {
+    MeshAdd {
+        mesh: GeometryId(id),
+        bytes: SlabRef {
+            slab: 7,
+            offset: 128,
+            length: 4096,
+        },
+        format,
+        reason: AddReason::Created as u8,
+        _pad: [0; 2],
     }
 }
 
@@ -567,13 +584,18 @@ fn a_plan_reports_where_to_acknowledge() {
     );
 }
 
-/// An unknown kind is counted and does not stop the read.
+/// Every kind the ABI defines is dispatched, so nothing is counted unknown.
 ///
-/// The ABI is revisioned; a newer producer may send a kind this consumer predates. A stream that
-/// is mostly unknown is a version mismatch presenting as a blank map, which is why it is counted
-/// rather than ignored.
+/// This case used to be the other way round: `MeshAdd` was the one kind the host did not read, and
+/// the assertion was that an undispatched kind is counted and survives. Reading the mesh envelope
+/// leaves the set empty, and what is worth pinning is that it *is* empty -- a kind added to the
+/// ABI and not dispatched here would make this fail, which is the reminder the old case was.
+///
+/// `Progress::unknown` does not cover the case its name suggests. A kind a newer producer sends
+/// and this build predates never reaches the host: `Consumer::peek` refuses the record and the
+/// read stops there. tessella#423.
 #[test]
-fn an_unknown_kind_is_counted_and_survived() {
+fn every_kind_the_abi_defines_is_dispatched() {
     let mut ring = Ring::new(CAPACITY);
     let mut host = Host::new();
 
@@ -586,11 +608,12 @@ fn an_unknown_kind_is_counted_and_survived() {
         producer
             .write(EnvelopeKind::ViewUse, use_of(1, 0, 0).as_bytes(), &[])
             .expect("room");
-        // A kind this host does not dispatch. `MeshAdd` is the one left -- `ViewDeclare` was, until
-        // it was read -- so whoever implements #93's mesh item changes this to `ViewTarget` and the
-        // last of them turns this case into one that can no longer be written.
         producer
-            .write(EnvelopeKind::MeshAdd, &[0u8; 16], &[])
+            .write(
+                EnvelopeKind::MeshAdd,
+                mesh(2, MeshFormat::Glb as u8).as_bytes(),
+                &[],
+            )
             .expect("room");
         let (update, payload) = order(0, 1, &[entry(1, 0, 0)]);
         producer
@@ -602,8 +625,10 @@ fn an_unknown_kind_is_counted_and_survived() {
     }
     let progress = host.read(ring.consumer());
 
-    assert_eq!(progress.unknown, 1, "the undispatched kind is counted");
-    assert_eq!(progress.records, 6, "and the read did not stop at it");
+    assert_eq!(progress.unknown, 0, "a kind here was not dispatched");
+    assert_eq!(progress.malformed, 0);
+    assert_eq!(progress.unsupported, 0);
+    assert_eq!(progress.records, 6, "and the read did not stop at any");
     assert!(host.plan(ViewId(0)).is_some(), "the frame still draws");
 }
 
@@ -1475,5 +1500,242 @@ fn two_views_batches_are_held_at_once() {
     assert!(
         host.batches(ViewId(9)).is_none(),
         "a view never planned has none"
+    );
+}
+
+/// A mesh is drawn from the order like any other layer, and says it is a mesh.
+///
+/// An authored model is not a `GeometryAdd`: there is no mbgl family for a PBR mesh and nothing
+/// for the producer to describe but where the bytes are. What it is, on this side, is an id in the
+/// geometry space with a `ViewUse` binding it and an order entry placing it -- so a batch key
+/// carries [`AUTHORED_MESH`] where a family would be, and the asset is looked up by id.
+///
+/// The slab reference is what a loader reads from, so it is read back field by field: a mesh whose
+/// bytes a consumer cannot find is a model layer that draws nothing, and the id alone would not
+/// say so.
+#[test]
+fn a_mesh_is_planned_as_an_authored_batch() {
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+
+    {
+        let (producer, _) = ring.split();
+        declare(producer, 0);
+        producer
+            .write(
+                EnvelopeKind::MeshAdd,
+                mesh(9, MeshFormat::Glb as u8).as_bytes(),
+                &[],
+            )
+            .expect("room");
+        producer
+            .write(EnvelopeKind::ViewUse, use_of(9, 0, 2).as_bytes(), &[])
+            .expect("room");
+        let (update, payload) = order(0, 1, &[entry(9, 2, 0)]);
+        producer
+            .write(EnvelopeKind::OrderUpdate, update.as_bytes(), &payload)
+            .expect("room");
+        producer
+            .write(EnvelopeKind::CameraUpdate, camera(0, 1).as_bytes(), &[])
+            .expect("room");
+    }
+    let progress = host.read(ring.consumer());
+    assert_eq!(progress.unsupported, 0, "glTF is a format this build knows");
+
+    let frame = host.plan(ViewId(0)).expect("a frame");
+    let batches: Vec<_> = frame.batches.iter().collect();
+    assert_eq!(batches.len(), 1, "one entry, one batch");
+    assert_eq!(
+        batches[0].key.builtin_shader, AUTHORED_MESH,
+        "a mesh batch has no mbgl family"
+    );
+    // And the value cannot be read as one, whatever it is: a sentinel that collided with a family
+    // would have the consumer bind that family's pipeline to an authored asset.
+    assert_eq!(
+        BuiltIn::from_repr(batches[0].key.builtin_shader),
+        None,
+        "the mesh sentinel names an mbgl family"
+    );
+    assert_eq!(batches[0].key.layer_index, 2, "and the order's layer");
+    assert_eq!(batches[0].geometries, &[GeometryId(9)]);
+
+    let held = frame.joiner.mesh(GeometryId(9)).expect("the mesh is held");
+    assert_eq!(held.add.format, MeshFormat::Glb as u8);
+    assert_eq!(held.add.bytes.slab, 7);
+    assert_eq!(held.add.bytes.offset, 128);
+    assert_eq!(held.add.bytes.length, 4096);
+    assert_eq!(
+        frame.joiner.drawable(GeometryId(9), ViewId(0)),
+        None,
+        "and it is not geometry, however the order names it"
+    );
+}
+
+/// A use that arrives before its mesh is kept, and draws when the asset lands.
+///
+/// A use is durable -- the producer sends one when a drawable enters a view's cover and not again
+/// while it stays -- and a model tile's bytes are hundreds of kilobytes, so the asset is the half
+/// that arrives late. Dropping the use would leave the model undrawn until the camera moved.
+#[test]
+fn a_use_before_the_mesh_still_draws() {
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+
+    {
+        let (producer, _) = ring.split();
+        declare(producer, 0);
+        producer
+            .write(EnvelopeKind::ViewUse, use_of(9, 0, 2).as_bytes(), &[])
+            .expect("room");
+        let (update, payload) = order(0, 1, &[entry(9, 2, 0)]);
+        producer
+            .write(EnvelopeKind::OrderUpdate, update.as_bytes(), &payload)
+            .expect("room");
+        producer
+            .write(EnvelopeKind::CameraUpdate, camera(0, 1).as_bytes(), &[])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+    assert_eq!(
+        host.plan(ViewId(0))
+            .expect("a frame")
+            .batches
+            .iter()
+            .count(),
+        0,
+        "the order names an asset that has not arrived"
+    );
+
+    {
+        let (producer, _) = ring.split();
+        producer
+            .write(
+                EnvelopeKind::MeshAdd,
+                mesh(9, MeshFormat::Glb as u8).as_bytes(),
+                &[],
+            )
+            .expect("room");
+    }
+    host.read(ring.consumer());
+
+    let frame = host.plan(ViewId(0)).expect("a frame");
+    let batches: Vec<_> = frame.batches.iter().collect();
+    assert_eq!(batches.len(), 1, "the asset landed and the use was waiting");
+    assert_eq!(batches[0].key.builtin_shader, AUTHORED_MESH);
+}
+
+/// A mesh whose format this build does not know is refused, and nothing is drawn from it.
+///
+/// The ABI says it of this field: a consumer "must skip the mesh rather than guess at the bytes".
+/// Guessing is worse than not drawing -- a glTF parser pointed at something else reads a header
+/// that is not one -- so the record is refused whole and the order entry naming it plans nothing.
+///
+/// Counted `unsupported` rather than `malformed`: the bytes parse, and a producer one revision
+/// ahead is not a corrupt stream.
+#[test]
+fn a_mesh_in_an_unknown_format_is_unsupported() {
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+
+    {
+        let (producer, _) = ring.split();
+        declare(producer, 0);
+        // A format no `MeshFormat` names, on an otherwise good record.
+        let newer = mesh(9, 7);
+        assert_eq!(MeshFormat::from_repr(newer.format), None, "not a known one");
+        producer
+            .write(EnvelopeKind::MeshAdd, newer.as_bytes(), &[])
+            .expect("room");
+        producer
+            .write(EnvelopeKind::ViewUse, use_of(9, 0, 2).as_bytes(), &[])
+            .expect("room");
+        let (update, payload) = order(0, 1, &[entry(9, 2, 0)]);
+        producer
+            .write(EnvelopeKind::OrderUpdate, update.as_bytes(), &payload)
+            .expect("room");
+        producer
+            .write(EnvelopeKind::CameraUpdate, camera(0, 1).as_bytes(), &[])
+            .expect("room");
+    }
+    let progress = host.read(ring.consumer());
+
+    assert_eq!(progress.unsupported, 1);
+    assert_eq!(progress.malformed, 0, "the bytes parse");
+    let frame = host.plan(ViewId(0)).expect("a frame");
+    assert_eq!(
+        frame.batches.iter().count(),
+        0,
+        "a refused mesh is not stored, so nothing plans it"
+    );
+    assert!(frame.joiner.mesh(GeometryId(9)).is_none());
+}
+
+/// One removal record drops a mesh, as it drops geometry.
+///
+/// The ids are one space, which is the ABI's own choice: `ViewUse`, `ViewRelease` and
+/// `GeometryRemove` bind, release and drop a mesh with no record of their own. A `GeometryRemove`
+/// that reached only the geometry map would leave the asset held and drawn after the producer said
+/// it was gone, with the slab it points into already handed back.
+#[test]
+fn a_removal_drops_a_mesh_too() {
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+
+    {
+        let (producer, _) = ring.split();
+        declare(producer, 0);
+        producer
+            .write(
+                EnvelopeKind::MeshAdd,
+                mesh(9, MeshFormat::Glb as u8).as_bytes(),
+                &[],
+            )
+            .expect("room");
+        producer
+            .write(EnvelopeKind::ViewUse, use_of(9, 0, 2).as_bytes(), &[])
+            .expect("room");
+        let (update, payload) = order(0, 1, &[entry(9, 2, 0)]);
+        producer
+            .write(EnvelopeKind::OrderUpdate, update.as_bytes(), &payload)
+            .expect("room");
+        producer
+            .write(EnvelopeKind::CameraUpdate, camera(0, 1).as_bytes(), &[])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+    assert_eq!(
+        host.plan(ViewId(0))
+            .expect("a frame")
+            .batches
+            .iter()
+            .count(),
+        1,
+        "drawn before the removal"
+    );
+
+    {
+        let (producer, _) = ring.split();
+        producer
+            .write(
+                EnvelopeKind::GeometryRemove,
+                GeometryRemove {
+                    geometry: GeometryId(9),
+                }
+                .as_bytes(),
+                &[],
+            )
+            .expect("room");
+    }
+    host.read(ring.consumer());
+
+    let frame = host.plan(ViewId(0)).expect("a frame");
+    assert!(
+        frame.joiner.mesh(GeometryId(9)).is_none(),
+        "the asset is still held after its removal"
+    );
+    assert_eq!(
+        frame.batches.iter().count(),
+        0,
+        "and the order still names it, so this is what stops it being drawn"
     );
 }
