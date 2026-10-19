@@ -141,3 +141,68 @@ fn a_missing_key_sorts_as_zero() {
         "every key is zero, so every one ties and the order reverses"
     );
 }
+
+/// The other half of mbgl's rule: when a layer's symbols are drawn in screen-y order.
+///
+/// `sortFeaturesByY` is four lines of `symbol_layout.cpp` and wider than the property's name:
+///
+/// ```text
+/// zOrderByViewportY = symbolZOrder == ViewportY ||
+///                     (symbolZOrder == Auto && !sortFeaturesByKey);
+/// sortFeaturesByY   = zOrderByViewportY && (TextAllowOverlap  || IconAllowOverlap ||
+///                                           TextIgnorePlacement || IconIgnorePlacement);
+/// ```
+///
+/// So `auto` — the default — orders by viewport y whenever no sort key is in force and any of the
+/// four overlap flags is set, which is most POI layers rather than the rare one that writes
+/// `viewport-y` by hand. tessella#428, where the sweep read 4,776 pixels on a scene that wrote no
+/// `symbol-z-order` at all.
+///
+/// Each case here differs from the one before it in one property, so what is being read is the
+/// rule rather than a particular style.
+#[test]
+fn the_viewport_y_order_follows_the_overlap_flags() {
+    let asked = |extra: &str| SymbolLayout::new(&layer(extra), 14.0, 1.0).sort_by_viewport_y;
+
+    // Nothing set: `auto`, no key, no flags.
+    assert!(!asked(""), "a layer with no overlap flag is not sorted");
+    assert!(
+        asked(r#", "text-allow-overlap": true"#),
+        "`auto` with no key orders by viewport y once overlap is allowed"
+    );
+    for flag in [
+        "icon-allow-overlap",
+        "text-ignore-placement",
+        "icon-ignore-placement",
+    ] {
+        assert!(
+            asked(&format!(r#", "{flag}": true"#)),
+            "{flag} asks for the same ordering"
+        );
+    }
+    assert!(
+        !asked(r#", "text-allow-overlap": false"#),
+        "a flag written false is a flag that is not set"
+    );
+
+    // A sort key takes `auto` the other way, and `viewport-y` takes it back.
+    assert!(
+        !asked(r#", "text-allow-overlap": true, "symbol-sort-key": ["get", "rank"]"#),
+        "a key in force is the ordering, so viewport y is not"
+    );
+    assert!(
+        asked(
+            r#", "text-allow-overlap": true, "symbol-sort-key": ["get", "rank"],
+                "symbol-z-order": "viewport-y""#
+        ),
+        "`viewport-y` declines the key and orders by the screen"
+    );
+    assert!(
+        !asked(r#", "text-allow-overlap": true, "symbol-z-order": "source""#),
+        "`source` is the source's order, whatever the flags say"
+    );
+    assert!(
+        asked(r#", "text-allow-overlap": true, "symbol-z-order": "auto""#),
+        "`auto` written out is `auto` left unwritten"
+    );
+}

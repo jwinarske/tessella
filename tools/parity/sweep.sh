@@ -204,6 +204,18 @@ for args in "14 1024 768 0 0" "14 1024 768 60 0"; do
   bash "$P/parity.sh" anchor_offset_p 52.52 13.405 $args
 done
 
+# Which of two overlapping symbols is drawn last, which is the camera's decision rather than the
+# source's: mbgl draws a layer's symbols lowest-on-screen last wherever overlap is allowed, and
+# this build drew them in creation order until tessella#428.
+#
+# Two bearings, because the second is the control: at `b200` the rotated order of each pair happens
+# to be the source order, so a build that does not sort agrees there and nowhere else -- which is
+# how the defect was told from a wrong sort.
+for args in "14 1024 768 0 0" "14 1024 768 0 200"; do
+  # shellcheck disable=SC2086 # five words by construction: zoom, width, height, pitch, bearing
+  bash "$P/parity.sh" zorder_p 52.52 13.405 $args
+done
+
 # And the other three families' offsets, which no example style writes either. Not zero: the line
 # half leaves about 130 pixels along one tile edge, and the note in `paint_translate` says what is
 # known about that. Circle and fill-extrusion are exact, and the number is here so a change in it

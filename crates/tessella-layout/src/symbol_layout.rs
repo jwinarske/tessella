@@ -921,6 +921,26 @@ pub struct SymbolLayout {
     /// mbgl's `sortFeaturesByKey`: the key is set *and* `symbol-z-order` is not `viewport-y`,
     /// which asks for a different ordering entirely.
     pub sort_by_key: bool,
+    /// Whether this layer's symbols are drawn in screen-y order rather than in creation order.
+    ///
+    /// mbgl's `sortFeaturesByY`, which is four lines of `symbol_layout.cpp` and wider than the
+    /// property's name suggests:
+    ///
+    /// ```text
+    /// zOrderByViewportY = symbolZOrder == ViewportY ||
+    ///                     (symbolZOrder == Auto && !sortFeaturesByKey);
+    /// sortFeaturesByY   = zOrderByViewportY && (TextAllowOverlap  || IconAllowOverlap ||
+    ///                                           TextIgnorePlacement || IconIgnorePlacement);
+    /// ```
+    ///
+    /// `auto` is the default and `auto` with no sort key *is* viewport-y ordering, so this is on
+    /// for any layer that allows overlap or ignores placement and does not sort by a key — which
+    /// is most POI layers rather than the rare one that writes `viewport-y` by hand. tessella#428.
+    ///
+    /// What it means for the drawable: the symbol lowest on the screen is drawn last, so it
+    /// covers the ones above it. The order is the *camera's*, so it cannot be baked into the
+    /// bucket -- see `SymbolBuffers::indices`, which a frame reorders rather than the layout.
+    pub sort_by_viewport_y: bool,
     /// Which passes this layer's text draws: the halo, the letters, or both.
     ///
     /// A halo is a *second drawable over the same geometry*, drawn underneath, so this is what
@@ -975,11 +995,25 @@ impl SymbolLayout {
         let text_passes = passes(layer, "text", zoom);
         // mbgl's `sortFeaturesByKey`. `symbol-z-order: viewport-y` sorts by screen position at
         // placement instead, so the two are alternatives rather than a pair.
-        let sort_by_key = layer.layout.contains_key("symbol-sort-key")
-            && layout_value(layer, "symbol-z-order", zoom, None)
+        let z_order = layout_value(layer, "symbol-z-order", zoom, None);
+        let z_order = z_order.as_ref().and_then(Value::as_str);
+        let sort_by_key =
+            layer.layout.contains_key("symbol-sort-key") && z_order != Some("viewport-y");
+        // And mbgl's other half. `auto` is the default, and `auto` without a sort key orders by
+        // viewport y -- so the flags are what decide it for almost every layer that has any of
+        // them. A flag's spec default is false, so an absent one leaves this off.
+        let flag = |key: &str| {
+            layout_value(layer, key, zoom, None)
                 .as_ref()
-                .and_then(Value::as_str)
-                != Some("viewport-y");
+                .and_then(Value::as_bool)
+                == Some(true)
+        };
+        let sort_by_viewport_y = (z_order == Some("viewport-y")
+            || (z_order.is_none_or(|order| order == "auto") && !sort_by_key))
+            && (flag("text-allow-overlap")
+                || flag("icon-allow-overlap")
+                || flag("text-ignore-placement")
+                || flag("icon-ignore-placement"));
         let symbol = text_options(layer, zoom, None, &text_size);
         let placement = Placement::of(layer, zoom);
 
@@ -1020,6 +1054,7 @@ impl SymbolLayout {
             text_size,
             icon_size,
             sort_by_key,
+            sort_by_viewport_y,
             text_passes,
             line: LineOptions {
                 symbol,

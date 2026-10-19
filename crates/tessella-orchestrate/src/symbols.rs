@@ -1008,3 +1008,82 @@ impl ViewSymbols {
         }
     }
 }
+
+/// Rewrites a bucket's indices so the symbol lowest on the screen is drawn last.
+///
+/// mbgl's `SymbolBucket::sortFeatures`, which `Placement` calls every pass with
+/// `state.getBearing()`. The vertices do not move: what is rebuilt is the index buffer, so each
+/// symbol's quads are referenced in the new order and drawn in it.
+///
+/// # Why a frame does this and the layout does not
+///
+/// The order is the camera's. A bucket is camera-free by §5.1 — baking a camera into it is what
+/// makes a cached tile wrong the moment the map turns — so the sort cannot be part of the layout
+/// however much it looks like geometry. What makes it cheap here is that the index list a frame
+/// hands the encoder is already built per frame from the bucket's own runs.
+///
+/// # The comparator is mbgl's, including the rounding
+///
+/// `lround(sin * anchor.x + cos * anchor.y)` ascending, ties broken by the *feature* index
+/// descending — `getSortedSymbols`, where the rounding is what makes two anchors a fraction of a
+/// tile unit apart sort as equal and the tie-break decide them. Dropping the rounding leaves the
+/// order of near-equal anchors to the last bits of a float, which is not a difference a style
+/// asked for.
+///
+/// The angle is mbgl's bearing: radians, negated against the compass degrees a camera carries.
+/// See `camera::bearing_radians`, and tessella#418 for what reading it as degrees costs.
+///
+/// # Declined, as mbgl declines it
+///
+/// A bucket whose indices are in more than one run is left alone. mbgl's own reason is that its
+/// sort "doesn't sort across text and icon segments so don't try", and the shape here is the
+/// same: a run is the stretch of indices belonging to one font stack, each drawn by its own
+/// drawable against its own atlas, and an order across them would be an order no draw can honor.
+pub fn sort_by_viewport_y(
+    buffers: &mut tessella_layout::symbol_bucket::SymbolBuffers,
+    laid: &[tessella_layout::symbol_bucket::LaidOut],
+    bearing: f64,
+) {
+    if buffers.runs.len() > 1 || laid.is_empty() {
+        return;
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let (sin, cos) = (bearing.sin() as f32, bearing.cos() as f32);
+    // One entry per instance: where its quads are, how far down the screen it is, and the
+    // feature it came from.
+    let mut order: Vec<(i64, core::cmp::Reverse<usize>, core::ops::Range<usize>)> = laid
+        .iter()
+        .filter_map(|instance| {
+            let quads = instance.vertices.start / 4..instance.vertices.end / 4;
+            let indices = quads.start * 6..quads.end * 6;
+            (indices.end <= buffers.indices.len()).then(|| {
+                let rotated = sin * instance.anchor.0 + cos * instance.anchor.1;
+                (
+                    // `round`, which is half away from zero: C's `lround` and not
+                    // `round_ties_even`, so an anchor exactly between two units sorts the way
+                    // mbgl's does.
+                    i64::from(rotated.round() as i32),
+                    core::cmp::Reverse(instance.pending),
+                    indices,
+                )
+            })
+        })
+        .collect();
+    // Stable, so instances whose key and feature tie keep the order they arrived in.
+    order.sort_by_key(|entry| (entry.0, entry.1));
+
+    let mut sorted = Vec::with_capacity(buffers.indices.len());
+    for (.., indices) in &order {
+        sorted.extend_from_slice(&buffers.indices[indices.clone()]);
+    }
+    // Anything the instances did not account for stays where it was, after them: a buffer holding
+    // quads no instance claims is a buffer this does not understand, and dropping them would draw
+    // less than the frame before.
+    if sorted.len() != buffers.indices.len() {
+        return;
+    }
+    buffers.indices = sorted;
+    if let Some(run) = buffers.runs.first_mut() {
+        run.indices = 0..buffers.indices.len();
+    }
+}

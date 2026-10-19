@@ -1,0 +1,119 @@
+{
+ "version": 8,
+ "name": "z-order-parity",
+ "sprite": "http://127.0.0.1:8081/sprites/emerald",
+ "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
+ "sources": {
+  "places": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {
+       "sprite": "interstate_3"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3921254,
+        52.5194777
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "sprite": "interstate_1"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3921254,
+        52.5205223
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "sprite": "interstate_3"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.5194777
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "sprite": "interstate_1"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.5205223
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "sprite": "interstate_3"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4178746,
+        52.5194777
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "sprite": "interstate_1"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4178746,
+        52.5205223
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#f4f1ea"
+   }
+  },
+  {
+   "id": "icons",
+   "type": "symbol",
+   "source": "places",
+   "layout": {
+    "symbol-placement": "point",
+    "icon-image": [
+     "get",
+     "sprite"
+    ],
+    "icon-size": 2,
+    "icon-allow-overlap": true,
+    "icon-ignore-placement": true,
+    "symbol-z-order": "viewport-y"
+   }
+  }
+ ]
+}
