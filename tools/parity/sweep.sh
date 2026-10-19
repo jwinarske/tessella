@@ -189,6 +189,21 @@ for args in "14 1024 768 0 0" "14 1024 768 60 0"; do
   bash "$P/parity.sh" variable_p 52.52 13.405 $args
 done
 
+# The paired property that replaces the three `variable_p` covers: `text-variable-anchor-offset`
+# gives every position its own offset, and mbgl reads `text-variable-anchor`, `text-radial-offset`
+# and `text-offset` only where it is absent -- so the layer here writes all four and has to ignore
+# three of them.
+#
+# The arrangement is what makes a per-anchor offset visible, and it took three tries: the blockers
+# are the *topmost* symbol layer, because placement walks the style from the top down; the list's
+# first position sits exactly on the blocker, so a blocked label has to reach the second; and each
+# offset pushes *away* from its anchor, because an anchor names where the label sits and an offset
+# toward the point lands back on what is there.
+for args in "14 1024 768 0 0" "14 1024 768 60 0"; do
+  # shellcheck disable=SC2086 # five words by construction: zoom, width, height, pitch, bearing
+  bash "$P/parity.sh" anchor_offset_p 52.52 13.405 $args
+done
+
 # And the other three families' offsets, which no example style writes either. Not zero: the line
 # half leaves about 130 pixels along one tile edge, and the note in `paint_translate` says what is
 # known about that. Circle and fill-extrusion are exact, and the number is here so a change in it

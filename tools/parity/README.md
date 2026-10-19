@@ -425,6 +425,35 @@ that.
 
   Flat and pitched, and 0 at both: this found no defect. What it leaves behind is the guard.
 
+- `anchor_offset_p` — `text-variable-anchor-offset`, the paired property that replaces the three
+  `variable_p` covers. Each position carries its own offset in ems, and mbgl reads
+  `text-variable-anchor`, `text-radial-offset` and `text-offset` only where this one is absent —
+  so the layer here writes all four and has to ignore three of them.
+
+      anchor_offset_p  z14 p0     0 of 786432
+                               4,292   with the paired list ignored
+                               1,593   with every anchor taking the first pair's offset
+                               1,593   with the offset's y negated
+                               2,110   with the baseline shift the vertical anchors carry dropped
+
+  Three arrangements measured nothing before this one, and each failed for its own reason. The
+  blockers have to be the *topmost* symbol layer, because placement walks the style from the top
+  down: below the labels they are placed into a grid the labels have already left, and
+  `text-allow-overlap` puts them on top without ever being collided with. The list's first
+  position has to be one that cannot fit — `center` at an offset of nothing, exactly on the
+  blocker — because with it free every label took the first entry and a reader using the first
+  pair's vector for every anchor drew the scene correctly. And each offset has to push *away* from
+  its anchor: an anchor names where the label sits relative to its point, so `["top", [0, -3]]`
+  hangs the label below the point and then pulls it back onto the blocker. With that version all
+  four positions collided, both renderers dropped the label, and they agreed about nothing.
+
+  One rule here cannot be mutated, which is a property of the design rather than a gap: letting
+  the layer-wide radial offset through reads 0, because `symbols.rs` takes
+  `entry.offset.unwrap_or_else(…)` and a paired list's own offset means the layer-wide one is never
+  read at all.
+
+  Flat and pitched, and 0 at both: no defect. The guard is what it leaves.
+
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
   then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.
