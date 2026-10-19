@@ -454,6 +454,28 @@ that.
 
   Flat and pitched, and 0 at both: no defect. The guard is what it leaves.
 
+- `zorder_p` — which of two overlapping symbols is drawn last. Three pairs of icons, each pair
+  written with the *lower* one first, so source order and screen order disagree: mbgl draws the
+  symbol lowest on the screen last wherever overlap is allowed, and this build drew them in
+  creation order.
+
+      zorder_p  z14 p0 b0     4,776 of 786432   before the sort
+                z14 p0 b200       0             before it, as well
+                                  0             after, at both
+
+  The second row is why the scene has two bearings. At `b200` the rotated order of each pair
+  happens to *be* the source order, so a build that does not sort agrees there — which is how a
+  missing sort was told from a wrong one, and what the row is kept for.
+
+  The trigger is wider than the property's name. `sortFeaturesByY` is `symbol-z-order: viewport-y`
+  **or** `auto` without a sort key, and either of those with any of the four overlap flags — so it
+  is on for most POI layers rather than the rare style that writes `viewport-y` by hand. Removing
+  `symbol-z-order` from this scene entirely leaves the same 4,776. tessella#428.
+
+  What kept it out of the sweep until now: the sort is per bucket, so it only moves anything where
+  two symbols of one layer *in one tile* overlap on the screen. `aligned_p`'s icon row is three
+  icons in three tiles — one symbol per bucket, nothing to sort.
+
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
   then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.

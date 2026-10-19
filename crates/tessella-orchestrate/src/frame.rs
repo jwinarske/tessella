@@ -3604,8 +3604,30 @@ fn place_symbols(
                     *slot = hidden;
                 }
             }
+            // The icons' own instances, which are not the text's: a label and its shield are one
+            // feature and two instances, each with its own vertex ranges in its own buffer.
+            if layout.sort_by_viewport_y {
+                crate::symbols::sort_by_viewport_y(
+                    &mut shaped,
+                    &placed,
+                    tessella_tile::camera::bearing_radians(view),
+                );
+            }
             Some(shaped)
         });
+
+        // And the order the text is drawn in, where the layer asks for the camera's rather than
+        // the source's. Last, because it rewrites the indices the opacity work above was written
+        // against and nothing after it reads them in the old order. The icons' own half is sorted
+        // where their instances are in hand, inside the closure above.
+        // See `symbols::sort_by_viewport_y`.
+        if layout.sort_by_viewport_y {
+            crate::symbols::sort_by_viewport_y(
+                &mut buffers,
+                laid,
+                tessella_tile::camera::bearing_radians(view),
+            );
+        }
 
         prepared.insert(
             key,
