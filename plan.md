@@ -4987,11 +4987,23 @@ a subdivision and a draw the consumer no longer makes.
   - Point labels drop the occasional glyph mid-word. Filed under this once before and turned out
     to be roads painting over the text, which is fixed; whatever is left is smaller and has not
     been measured.
-  - `continued_line` was dead code, and the precondition it needed now exists. It compares
-    `line[0]` against 0 and EXTENT exactly, which only holds for geometry clipped to the tile, and
-    this layout did not clip -- 0 of 898 features on a real tile set it. `clipLines` is now ported
-    and a cut run starts exactly on a boundary, so the flag can fire; whether it does, and whether
-    it changes anything, has not been measured.
+  - ~~`continued_line` was dead code~~ -- **measured, and it is live.** It compares `line[0]`
+    against 0 and EXTENT exactly, which only holds for geometry clipped to the tile, and the
+    layout did not clip when this was written: 0 of 898 features on a real tile set it. `clipLines`
+    is ported now, a cut run starts exactly on a boundary, and the flag both fires and decides
+    pixels. Measured by forcing it either way on `linelabel_p`, whose roads are cut by the tile's
+    own edges:
+
+        linelabel_p  z14 p0     0 of 786432   as computed
+                             2,126            forced off
+                             4,482            forced on
+
+    So the two branches it chooses between are worth two to four thousand pixels of that scene, and
+    the rule as ported is the one that agrees with the oracle. What it changes is the resampling
+    offset -- half a spacing for a continued line against a label-length offset for one that
+    starts where it starts -- and whether an empty anchor list may fall back to the line's
+    midpoint. Nothing further to do here; the entry is kept because "whether it fires" was the
+    question and a number is the answer.
 
 - **Washington drew about a fifth more label than the oracle.** *Fixed, by the collision box.* The
   lead recorded here was that the two scenes disagreed -- Berlin near the oracle, Washington 20%
