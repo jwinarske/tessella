@@ -403,6 +403,28 @@ that.
   single run of a scene can only ever tell you that it passed once. The ablations that first read
   "it needs all four layers of particular shapes" were each one run.
 
+- `variable_p` — what a label does when it cannot sit where it would rather. `text-variable-anchor`
+  offers a list of positions and placement takes the first that fits; `text-radial-offset` is how
+  far from the anchor it sits; `text-justify: auto` follows whichever position won. All three were
+  read and none was measured against the oracle, which is the same gap `text-rotate` was in.
+
+  The scene is built so each rule can fail on its own, and each is a mutation that moves it:
+
+      variable_p  z14 p0     0 of 786432
+                           3,181   with the anchor list ignored
+                           5,221   with the radial distance read as zero
+                           1,793   with `auto` taking the layer's own anchor
+
+  Which took three attempts to arrange, and the two that failed are the instructive part. A
+  blocker row only above the labels leaves `bottom` free, so the list's *second* entry is taken and
+  a reader cannot tell a fallback from a preference — hence a pair of blockers, above and below.
+  One-word labels justify the same way whatever `auto` answers, so the labels are two lines of
+  unequal length. And a list starting at `top` justifies center, which is what the layer's own
+  `text-anchor` already does, so the justify mutation read 0 until the list started at a *side*
+  anchor.
+
+  Flat and pitched, and 0 at both: this found no defect. What it leaves behind is the guard.
+
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
   then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.

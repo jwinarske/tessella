@@ -1,0 +1,259 @@
+{
+ "version": 8,
+ "name": "variable-anchor-parity",
+ "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
+ "sources": {
+  "places": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "blockers",
+       "name": "ABOVE"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3921254,
+        52.5210968
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "blockers",
+       "name": "BELOW"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3921254,
+        52.5189032
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "blockers",
+       "name": "ABOVE"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.5210968
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "blockers",
+       "name": "BELOW"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.5189032
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "blockers",
+       "name": "ABOVE"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4178746,
+        52.5210968
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "blockers",
+       "name": "BELOW"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4178746,
+        52.5189032
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "variable",
+       "name": "ONE SHIFTED"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3921254,
+        52.52
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "variable",
+       "name": "TWO SHIFTED"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.52
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "variable",
+       "name": "SIX SHIFTED"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4178746,
+        52.52
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "variable",
+       "name": "FOUR OPEN"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.3921254,
+        52.5260061
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "variable",
+       "name": "FIVE OPEN"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.405,
+        52.5260061
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "variable",
+       "name": "NINE OPEN"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        13.4178746,
+        52.5260061
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#f4f1ea"
+   }
+  },
+  {
+   "id": "blockers",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "blockers"
+   ],
+   "layout": {
+    "symbol-placement": "point",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 20,
+    "text-allow-overlap": true,
+    "text-ignore-placement": false
+   },
+   "paint": {
+    "text-color": "#101014"
+   }
+  },
+  {
+   "id": "variable",
+   "type": "symbol",
+   "source": "places",
+   "filter": [
+    "==",
+    [
+     "get",
+     "kind"
+    ],
+    "variable"
+   ],
+   "layout": {
+    "symbol-placement": "point",
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 18,
+    "text-variable-anchor": [
+     "left",
+     "right",
+     "top",
+     "bottom"
+    ],
+    "text-radial-offset": 1.2,
+    "text-justify": "auto",
+    "text-max-width": 4,
+    "text-allow-overlap": false,
+    "text-ignore-placement": false
+   },
+   "paint": {
+    "text-color": "#b03030"
+   }
+  }
+ ]
+}

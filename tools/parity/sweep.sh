@@ -175,6 +175,20 @@ for args in "14 1024 768 0 0" "14 1024 768 60 0" "14 1024 768 0 200" "14 1024 76
   bash "$P/parity.sh" aligned_p 52.52 13.405 $args
 done
 
+# What a label does when it cannot sit where it would rather: `text-variable-anchor` offers a list
+# of positions and placement takes the first that fits, `text-radial-offset` is how far from the
+# anchor it sits, and `text-justify: auto` follows whichever position won. Three rules no other
+# scene here exercises -- the properties are read and nothing measured them against the oracle.
+#
+# The scene is built so each rule can fail on its own: blockers above and below take the first two
+# positions, so a label has to reach the third; the labels are two lines of unequal length, because
+# a single line looks the same under every justification; and the list starts at a *side* anchor, so
+# the justification differs from the layer's own `text-anchor` even where nothing collides.
+for args in "14 1024 768 0 0" "14 1024 768 60 0"; do
+  # shellcheck disable=SC2086 # five words by construction: zoom, width, height, pitch, bearing
+  bash "$P/parity.sh" variable_p 52.52 13.405 $args
+done
+
 # And the other three families' offsets, which no example style writes either. Not zero: the line
 # half leaves about 130 pixels along one tile edge, and the note in `paint_translate` says what is
 # known about that. Circle and fill-extrusion are exact, and the number is here so a change in it
