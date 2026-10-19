@@ -5005,6 +5005,50 @@ a subdivision and a draw the consumer no longer makes.
     midpoint. Nothing further to do here; the entry is kept because "whether it fires" was the
     question and a number is the answer.
 
+- **`merge_lines` was ported and no scene held it.** *Closed, by `line_merge_p`.* The rule
+  rejoins the features that share a name and an endpoint before any anchor is chosen, which is
+  the shape real street data arrives in -- cut by the tiler, split again at every attribute
+  change. Disabling it moves no committed scene: `linelabel_p` at four cameras, `arealabel_p` and
+  the all-families scene all stay at their own numbers, because their roads arrive whole.
+
+  `line_merge_p` holds it -- five sinuous roads, each cut into three stubs that share endpoints,
+  bending every twenty pixels, so a stub on its own is shorter than its own label. Three cameras
+  at 0, and 9,183 / 7,044 / 8,992 with the merge disabled.
+
+  Two arrangements built alongside it measured nothing, and that is worth as much as the one that
+  did. A junction of two roads across a tile boundary, and twenty straight roads over four tiles
+  dropping seventy per cent of their label coverage to collision -- 5,192 label pixels survive of
+  the 17,340 the same scene draws with overlap allowed -- both read 0 against the oracle. Both are
+  also covered already where they would bite: the collision padding by the all-families scene at
+  22,474, the padded grid margin by the same scene at 3,608, the tile clip by `linelabel_p` at
+  2,325. So heavy contention, cross-tile ordering and scale are not where a line-placement
+  difference is left to hide, and neither scene is committed.
+
+- **One label of ten sits a pixel right of the oracle's, on one curve at one zoom.** *Open,
+  isolated, and reproducible from the tree:*
+
+      tools/parity/parity.sh line_merge_p 52.52 13.405 15 1024 768 0 0   765 of 786432
+
+  What it is not, each read by running the scene again with one thing changed:
+
+  - It is one label. The other nine in that frame have no differing pixel above the threshold,
+    and the 765 falls to **51** when ours is shifted one pixel left -- a rigid shift of the whole
+    label, so the anchor or the walk's start rather than the per-glyph angles.
+  - It is one road of the five, and it survives that road arriving whole rather than in stubs, so
+    `merge_lines` is not in it.
+  - It is the curve. The same corridor straight reads 0; so does nine tenths of the amplitude, and
+    six fifths of it.
+  - It is not the vertex lattice. Snapping every vertex onto exact z15 tile units leaves it at 778
+    against 778 unsnapped.
+  - It is not the spacing, the size or the label's length: `symbol-spacing` 200 and 240, `text-size`
+    14, and a shorter name all keep it.
+  - It is z15 alone. The same geometry reads 0 at z14 and at z16.
+
+  So it is a knife edge rather than a rule: one amplitude at one zoom where a label lands sixteen
+  tile units -- one pixel at this zoom's 8192 over 512 -- from where mbgl puts it. It is recorded
+  rather than held, because a sweep row on a coin flip gates nothing; the committed rows are the
+  three z14 cameras, which read 0.
+
 - **Washington drew about a fifth more label than the oracle.** *Fixed, by the collision box.* The
   lead recorded here was that the two scenes disagreed -- Berlin near the oracle, Washington 20%
   over -- so whatever was left was something Washington's data had more of. It was not: it was

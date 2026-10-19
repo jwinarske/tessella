@@ -142,6 +142,25 @@ for args in "14 1024 768 0 0" "14 1024 768 60 0" "14 1024 768 0 200" "15 1024 76
   bash "$P/parity.sh" linelabel_p 52.52 13.405 $args
 done
 
+# And a road that arrives in pieces, which is how a street arrives in real data: the tiler cuts
+# it and every attribute change splits it, so `merge_lines` rejoins the features sharing a name
+# and an endpoint before an anchor is chosen. Nothing else here holds that rule -- disable it and
+# every scene above stays at its own number, because their roads arrive whole.
+#
+# Five sinuous roads, each cut into three stubs that share endpoints, bending every twenty pixels:
+# a stub on its own is shorter than its own label, so an unmerged road labels nothing where a
+# merged one labels three times. With the merge disabled these three cameras read 9,183, 7,044
+# and 8,992.
+#
+# Three cameras where `linelabel_p` has four. The fourth, z15, reads 765 and not 0 -- one of that
+# frame's ten labels, one pixel right of the oracle's, and 51 gross after shifting ours a pixel
+# back. It is a knife edge: nine tenths of the curve's amplitude reads 0, and so does six fifths
+# of it. Recorded in plan.md rather than held here, because a row on a coin flip gates nothing.
+for args in "14 1024 768 0 0" "14 1024 768 60 0" "14 1024 768 0 200"; do
+  # shellcheck disable=SC2086 # five words by construction: zoom, width, height, pitch, bearing
+  bash "$P/parity.sh" line_merge_p 52.52 13.405 $args
+done
+
 # And a label on an *area*, which is a third rule again: not a vertex and not a midpoint but the
 # pole of inaccessibility, once per polygon. Five shapes -- an L, a ring with a hole, a pair, a
 # rectangle, and a star whose pole the search's queue order decides.
