@@ -335,6 +335,28 @@ that.
   name upside down and makes `text-keep-upright` flip it; a pitch is what bends the walk; the
   second zoom is for the spacing, which is measured against the view's zoom and not the tile's.
 
+- `line_merge_p` — a road that arrives in pieces. Real street data is cut by the tiler and split
+  again at every attribute change, so mbgl's `mergeLines` rejoins the features that share a name
+  and an endpoint before any anchor is chosen. That rule was ported and no scene held it: disable
+  it and `linelabel_p` at four cameras, `arealabel_p` and the all-families scene all stay at their
+  own numbers, because their roads arrive whole.
+
+  Five sinuous roads, each cut into three stubs sharing endpoints, bending every twenty pixels, so
+  a stub on its own is shorter than its own label — an unmerged road labels nothing where a merged
+  one labels three times.
+
+      line_merge_p  z14 p0     0 of 786,432   as computed
+                           9,183              with `merge_lines` disabled
+                    z14 p60  7,044            the same, pitched
+                    z14 b200 8,992            the same, turned
+
+  Three cameras, where `linelabel_p` has four. The fourth is z15, and it reads 765: one of the ten
+  labels in that frame sits a pixel right of the oracle's, and the whole 765 is that one label —
+  51 gross once ours is shifted back a pixel, and no differing pixel anywhere else. A knife edge
+  rather than a rule — the same corridor straight reads 0, and so do nine tenths and six fifths of
+  the curve's amplitude — so it is recorded in plan.md with its reproduction instead of held as a
+  row here.
+
 - `arealabel_p` — five areas with a point-placed name. A third anchoring rule again: mbgl labels a
   polygon at its *pole of inaccessibility* — the center of the largest circle that fits inside it,
   through `mapbox::polylabel` to one pixel of tile units — once per polygon. This anchored at a
