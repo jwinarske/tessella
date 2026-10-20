@@ -99,11 +99,17 @@ mod tests {
     /// 110.6 -- latitude is *shorter* there, which is the ellipsoid's flattening and is the sign
     /// that `kx` and `ky` have not been swapped. Swapping them is invisible at the equator in a
     /// picture and is a tenth of a percent in the numbers.
+    ///
+    /// The tolerance is a tenth of a meter, not the meter it was. At the equator `kx` does not
+    /// depend on the flattening at all and `ky` goes as `1 - e²`, so mutating `FLATTENING` to
+    /// `1/298` -- wrong in the fourth digit -- moved `ky` by 0.64 m and the old bound let it
+    /// through. The computed values sit within 6 mm of the references, so a tenth of a meter
+    /// has seventeen times the headroom it needs.
     #[test]
     fn the_equators_multipliers_are_the_ellipsoids() {
         let ruler = Ruler::at(0.0);
-        assert!((ruler.kx() - 111_319.49).abs() < 1.0, "{}", ruler.kx());
-        assert!((ruler.ky() - 110_574.27).abs() < 1.0, "{}", ruler.ky());
+        assert!((ruler.kx() - 111_319.49).abs() < 0.1, "{}", ruler.kx());
+        assert!((ruler.ky() - 110_574.27).abs() < 0.1, "{}", ruler.ky());
         assert!(
             ruler.ky() < ruler.kx(),
             "latitude is the shorter degree here"

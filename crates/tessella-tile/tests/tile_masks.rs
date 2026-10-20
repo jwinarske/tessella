@@ -222,3 +222,42 @@ fn a_whole_tile_is_not_an_empty_mask() {
 fn an_empty_set_masks_nothing() {
     assert!(update_tile_masks(&[]).is_empty());
 }
+
+/// The recursion stops at thirteen levels, which is where a sub-tile stops having an extent.
+///
+/// `MAX_DEPTH` is the backstop for a renderable set this build did not produce, so nothing else
+/// here reaches it: mutating it to 12 left all 2,439 tests passing. A mask entry's extent is
+/// `EXTENT >> z` and `EXTENT` is 8192, so depth 13 is the last with a whole unit in it — which
+/// is the derivation the constant comes from and what this asserts, from both sides.
+#[test]
+fn the_mask_descends_thirteen_levels_and_no_further() {
+    assert_eq!(
+        tessella_tile::projection::EXTENT.trailing_zeros(),
+        13,
+        "the depth bound is log2(EXTENT); this test's numbers follow from it"
+    );
+
+    // Thirteen levels down: the entry exists, so the bound is not lower than thirteen.
+    let deep = update_tile_masks(&sorted(&[tile(0, 0, 0), tile(13, 0, 0)]));
+    assert_eq!(
+        deep.iter().flatten().map(|e| e.z).max(),
+        Some(13),
+        "a descendant thirteen levels down gets its own mask entry"
+    );
+
+    // Fourteen: clamped, so the bound is not higher than thirteen, and nothing degenerate
+    // reaches the mask.
+    let deeper = update_tile_masks(&sorted(&[tile(0, 0, 0), tile(14, 0, 0)]));
+    assert_eq!(
+        deeper.iter().flatten().map(|e| e.z).max(),
+        Some(13),
+        "a descendant fourteen levels down is clamped to thirteen"
+    );
+    assert!(
+        deeper
+            .iter()
+            .flatten()
+            .all(|e| tessella_tile::projection::EXTENT >> e.z >= 1),
+        "every entry keeps at least one unit of extent"
+    );
+}
