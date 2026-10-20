@@ -364,3 +364,32 @@ fn identities_are_unique_across_layers() {
         "and every one of them was actually assigned"
     );
 }
+
+/// And a label too far off is a different label.
+///
+/// The test above is one-sided: it asserts that fifty units of drift still match, which a
+/// *coarser* grid satisfies just as well. So it pins a floor under the cell size and not the cell
+/// size — halving `ROUNDING` left it passing, along with all 2,433 other tests.
+///
+/// This is the other side. At mbgl's grid a label 150 units off is a new label; with the grid
+/// twice as wide it would be lent the parent's identity, and two labels 150 units apart would
+/// brighten and dim as one.
+#[test]
+fn a_label_too_far_off_is_a_different_label() {
+    let mut index = CrossTileIndex::new();
+    let mut next_id = 0u32;
+
+    let parent = DataTileId::overscaled(6, 0, 6, 8, 8);
+    let mut parent_symbols = symbols(&[("Detroit", 1000.0, 1000.0)]);
+    index.add_bucket(parent, 1, &mut parent_symbols, &mut next_id);
+
+    // 1850 against the exact 2000: outside the grid cell, where 1950 was inside it.
+    let child = DataTileId::overscaled(7, 0, 7, 16, 16);
+    let mut child_symbols = symbols(&[("Detroit", 1850.0, 1850.0)]);
+    index.add_bucket(child, 2, &mut child_symbols, &mut next_id);
+
+    assert_ne!(
+        child_symbols[0].cross_tile_id, parent_symbols[0].cross_tile_id,
+        "a label 150 units off is not the same label"
+    );
+}
