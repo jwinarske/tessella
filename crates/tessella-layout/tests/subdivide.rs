@@ -297,3 +297,51 @@ fn a_terrain_grid_keeps_every_triangle_in_addressable_segments() {
     let (one, _) = build_features_tracked_on(&[rings.as_slice()], step, Outlines::default());
     assert_eq!(bucket.indices.len(), 5 * one.indices.len());
 }
+
+/// How far the chord of one segment sits from the sphere, in pixels.
+///
+/// The same arithmetic `globe::edge_segments` solves, written out here so the test states the
+/// property rather than restating the implementation's answer.
+fn chord_error(z: u8, segments: u32) -> f64 {
+    use core::f64::consts::PI;
+    let radius = tessella_tile::camera::world_size(f64::from(z) + 1.0) / (2.0 * PI);
+    let arc = 2.0 * PI / 2f64.powi(i32::from(z));
+    radius * (1.0 - (arc / (2.0 * f64::from(segments))).cos())
+}
+
+/// A sphere's edge is split to within half a pixel, and no finer.
+///
+/// `DEFAULT_TOLERANCE` is that half pixel, and nothing held it: mutating it to a whole pixel left
+/// all 2,433 tests passing, because `edge_cells` is called only from inside its own module and
+/// every test in this file passes `grid_step` an explicit segment count instead. So the
+/// tolerance-derived path a sphere actually takes had no test at all.
+///
+/// Stated as the property rather than a table of counts: the chord at `edge_cells(z)` segments
+/// must sit within the tolerance, and one segment fewer must not — which is what "the fewest
+/// segments that stay within half a pixel" means, and what a coarser tolerance breaks.
+///
+/// The half pixel is written out here rather than read from `subdivide::DEFAULT_TOLERANCE`, and
+/// that is the whole point: the first version of this test compared against the constant itself,
+/// so mutating the constant moved the test's own threshold with it and the test passed hollow.
+/// §13.4 derives its subdivision at half a pixel; this restates that number independently.
+const HALF_PIXEL: f64 = 0.5;
+
+#[test]
+fn a_sphere_edge_is_split_to_within_half_a_pixel() {
+    for z in 0..8u8 {
+        let segments = tessella_layout::subdivide::edge_cells(z);
+        let within = chord_error(z, segments);
+        assert!(
+            within <= HALF_PIXEL,
+            "z{z}: {segments} segments leave the chord {within} px out, past half a pixel"
+        );
+        if segments > 1 {
+            let coarser = chord_error(z, segments - 1);
+            assert!(
+                coarser > HALF_PIXEL,
+                "z{z}: {} segments would have been enough, so {segments} is not the fewest",
+                segments - 1
+            );
+        }
+    }
+}
