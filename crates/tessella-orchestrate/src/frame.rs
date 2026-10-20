@@ -1826,8 +1826,18 @@ fn emit_group(
     // Borrowed, not built. `PlacementState` is the map's and outlives the frame, which is what
     // lets a fade run: see its documentation for why both the identity and the fade had to stop
     // being per-frame together.
+    // Whether this frame places again, or keeps what the last one decided.
+    //
+    // mbgl's `placementChanged`: `!placementController.placementIsRecent(...)`. A frame that
+    // does not place keeps the previous decisions and only steps the fades toward them, which
+    // is what stops a label being re-decided part way through its crossfade.
+    let replace = !placement.placement_is_recent(view.zoom);
     let placement = core::cell::RefCell::new(placement);
-    placement.borrow_mut().symbols.begin();
+    if replace {
+        // Only when placing. `begin` clears what the last frame decided, and the decisions are
+        // exactly what a frame that is not placing has to keep.
+        placement.borrow_mut().symbols.begin();
+    }
 
     // The quad each heatmap layer's second pass draws, in the *map's* view. One per layer
     // rather than one per tile, which is why it is built here and not in the loop above: there
@@ -1924,11 +1934,17 @@ fn emit_group(
         frame.projection,
         frame.published_projection.as_ref(),
         &placement,
+        replace,
     );
     {
         let mut held = placement.borrow_mut();
-        held.placed = Some(placed);
-        held.placed_margin = placed_margin;
+        // Only a frame that placed has a grid to keep. One that did not built an empty one and
+        // the previous frame's is still the answer to "which labels are drawn here".
+        if replace {
+            held.placed = Some(placed);
+            held.placed_margin = placed_margin;
+            held.commit(view.zoom);
+        }
     }
 
     let mut packed: BTreeSet<u64> = BTreeSet::new();
@@ -2653,6 +2669,22 @@ pub struct PlacementState {
     placed: Option<tessella_place::grid::GridIndex<u32>>,
     /// The margin [`Self::placed`] was built with, which a screen coordinate is offset into.
     placed_margin: f32,
+    /// Milliseconds since the last placement was committed.
+    ///
+    /// Accumulated by [`Self::advance`], which is the only clock this state has.
+    since_commit_millis: f64,
+    /// How many times placement has run over this state's life.
+    ///
+    /// Not decoration: "did this frame place, or keep what the last one decided" is the whole of
+    /// the period below, and it is otherwise invisible from outside -- a frame that skipped
+    /// placement and one that placed the same answer are identical in everything else they
+    /// produce. It is what the period's test reads, and what a diagnostic would read.
+    placements: u64,
+    /// The zoom the last placement was committed at.
+    ///
+    /// mbgl's `Placement::placementZoom`, and read for the same one thing: the update period is
+    /// shortened while zooming out, because that is when labels start overlapping fastest.
+    commit_zoom: f64,
     /// How far a fade moves on the next frame.
     ///
     /// One is *instant*, and it is the right answer for a still picture: mbgl's
@@ -2695,6 +2727,54 @@ impl PlacementState {
             increment: 1.0,
             ..Self::default()
         }
+    }
+
+    /// Whether the last placement is recent enough that mbgl would not place again.
+    ///
+    /// mbgl's `PlacementController::placementIsRecent`. Placement is not re-run until the
+    /// previous one's crossfade has had time to finish, and mbgl's own comment says why: "Even
+    /// if transitionOptions.duration is set to a value < 300ms, we still wait for this default
+    /// transition duration before attempting another placement operation." Without it a label
+    /// is re-decided part way through its fade, and on a turning map that is a label trading
+    /// places with its neighbor several times a second.
+    ///
+    /// False where the fades are instant, which is mbgl's `!transitionsEnabled()` branch: a
+    /// static frame places every time it is asked, so nothing measured against `mbgl-render`
+    /// moves. False before anything has been placed, because there is nothing to keep.
+    #[must_use]
+    pub fn placement_is_recent(&self, zoom: f64) -> bool {
+        self.increment < 1.0
+            && self.placed.is_some()
+            && self.since_commit_millis < self.update_period_millis(zoom)
+    }
+
+    /// How long to wait before placing again, in milliseconds.
+    ///
+    /// mbgl's `Placement::getUpdatePeriod`: the fade duration, shortened by [`Self::zoom_adjustment`].
+    fn update_period_millis(&self, zoom: f64) -> f64 {
+        FADE_DURATION_MILLIS * (1.0 - self.zoom_adjustment(zoom))
+    }
+
+    /// mbgl's `Placement::zoomAdjustment`.
+    ///
+    /// Zooming out makes labels overlap quickly, so both the fade and the interval between
+    /// placements are shortened while it happens -- collisions are then found and resolved
+    /// sooner. Zooming in is not adjusted, which is why this cannot go below zero.
+    fn zoom_adjustment(&self, zoom: f64) -> f64 {
+        ((self.commit_zoom - zoom) / 1.5).max(0.0)
+    }
+
+    /// Records that a placement was committed at this zoom, restarting the period above.
+    fn commit(&mut self, zoom: f64) {
+        self.since_commit_millis = 0.0;
+        self.commit_zoom = zoom;
+        self.placements += 1;
+    }
+
+    /// How many times placement has run. See [`Self::placements`].
+    #[must_use]
+    pub const fn placements(&self) -> u64 {
+        self.placements
     }
 
     /// Which named labels the last frame drew inside a screen rectangle.
@@ -2774,6 +2854,10 @@ impl PlacementState {
         } else {
             1.0
         };
+        // The only clock this state has, and it is this one on purpose: the caller already says
+        // how long the frame took, so the placement period is measured in the same milliseconds
+        // the fades are.
+        self.since_commit_millis += elapsed_millis;
     }
 
     /// How far a fade moves on the next frame, which a test reads.
@@ -2949,6 +3033,8 @@ fn place_symbols(
     frame_projection: ProjectionMode,
     published_projection: Option<&[f64; 16]>,
     placement: &core::cell::RefCell<&mut PlacementState>,
+    // Whether to place again, or keep what the last frame decided. See the caller.
+    replace: bool,
 ) -> (
     BTreeMap<(usize, usize), PreparedSymbols>,
     tessella_place::grid::GridIndex<u32>,
@@ -3414,13 +3500,19 @@ fn place_symbols(
                 };
             }
         }
-        let offered: Vec<crate::symbols::FrameLabel<'_>> = labels.to_vec();
-        held.symbols.frame_in(
-            &offered,
-            project_with(&plane, grid_padding),
-            &options,
-            &mut grid,
-        );
+        // Offered only on a frame that places. The positions above are written every frame --
+        // a label still moves with the camera between placements, which is mbgl's behavior too
+        // -- but which labels won their space is the previous frame's answer until the period
+        // is up.
+        if replace {
+            let offered: Vec<crate::symbols::FrameLabel<'_>> = labels.to_vec();
+            held.symbols.frame_in(
+                &offered,
+                project_with(&plane, grid_padding),
+                &options,
+                &mut grid,
+            );
+        }
 
         // A variable-anchored point label is positioned here rather than by the shader, because
         // which anchor it took was decided against the collision index a line above and the
@@ -3465,7 +3557,19 @@ fn place_symbols(
     }
     held.indexed.retain(|key, _| seen_keys.contains(key));
 
-    held.symbols.settle(increment);
+    // One step while a fade is running; a settle only for a still picture.
+    //
+    // `settle` drives every fade to its resting value in up to eight steps, which is right for
+    // mbgl's static mode -- `symbolFadeChange` is one there, and a frame is drawn settled.
+    // Called on an animating frame it advances the fades eight times per frame: measured on a
+    // turning map, a 300 ms crossfade finished in two frames, about 50 ms, and a label swapping
+    // with its neighbor blinked rather than dissolving. mbgl applies `symbolFadeChange` once
+    // per frame, which is what `step` is.
+    if increment >= 1.0 {
+        held.symbols.settle(increment);
+    } else {
+        held.symbols.step(increment);
+    }
 
     for key in keys {
         let Some(entry) = shaped.remove(&key) else {
