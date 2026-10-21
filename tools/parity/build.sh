@@ -33,13 +33,18 @@ ninja -C "$PARITY_WORK/consumer" tsf_consumer >/dev/null 2>&1 || {
 # Both probes, same link line. `quad_probe` is the other half of the smoke test -- four views
 # on one engine over `quad_remote.json`, which is what catches a regression in layer masking or
 # in the shared scene that a single-view sweep cannot see.
+# `shaders`, not `vkshaders`. Filament renamed the archive and every staging here carries
+# `libshaders.a` alone -- 1.75, 1.78 and the one `FILAMENT_STAGING` points at by default. The old
+# name survived in this line and in `filament-1.75.0`'s own CMake package config, which is why a
+# consumer resolving Filament through `find_package` from that prefix fails the same way. Nothing
+# caught it because the probes are built by hand and CI does not build them.
 probe() {
   clang++ -std=c++20 -stdlib=libc++ -O1 -g \
     -I"$TESSELLA_FLUORITE/native/include" -I"$TESSELLA_DIR/include" -I"$FILAMENT_STAGING/include" \
     "$TESSELLA_FLUORITE/native/test/$1.cc" \
     "$PARITY_WORK/consumer/libtsf_consumer.a" \
     -Wl,--start-group \
-    "$FILAMENT_STAGING"/lib/x86_64/lib{filament,backend,bluevk,bluegl,filabridge,filaflat,utils,geometry,smol-v,vkshaders,ibl,zstd}.a \
+    "$FILAMENT_STAGING"/lib/x86_64/lib{filament,backend,bluevk,bluegl,filabridge,filaflat,utils,geometry,smol-v,shaders,ibl,zstd}.a \
     -Wl,--end-group \
     "$TESSELLA_DIR/target/debug/libtessella_ffi.a" \
     -lpthread -ldl -lm -lEGL -lGL \
