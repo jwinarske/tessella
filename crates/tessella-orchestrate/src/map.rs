@@ -1499,27 +1499,56 @@ impl Map {
         });
 
         self.layouts.begin_frame();
-        let emitted = frame::emit_incremental(
+        let frame = Frame {
+            published_projection: self.published_projection,
+            projection: self.projection,
+            style: &self.style,
+            view: &self.view,
+            view_id: self.view_id,
+            tiles: &placed,
+            buckets: &buckets,
+            origins: &origins,
+            light: &self.light,
+            fonts: self.fonts.as_ref(),
+            patterns: patterns.as_ref(),
+            states: states.as_ref(),
+        };
+        // Compact and try once more when the region could not take the frame.
+        //
+        // `tessella.h` has always said this happens -- "The frame compacts and the next tick
+        // retries" -- and it did not. Compaction ran only at the top of a tick, behind
+        // `waste >= COMPACTION_FLOOR && waste >= used / 2`, and a region that has just refused a
+        // frame does not reliably satisfy the second: the cursor is near the ceiling, so half of
+        // it is a large number and the dead space below may be less. The frame then failed, the
+        // arena rewound to exactly where it was, and the next tick failed the same way -- for as
+        // long as the map was up. A camera that keeps moving reaches this eventually at any
+        // capacity, and what it looks like is a map frozen on its last frame while every counter
+        // above it goes on moving: the tick runs, the camera advances, the consumer redraws what
+        // it already holds, and nothing is reported.
+        //
+        // Once, not in a loop. If the frame still does not fit after the region has been
+        // compacted whole, it does not fit, and the caller gets the error it would have had.
+        let emitted = match frame::emit_incremental(
             producer,
             &mut self.arena,
             &mut self.layouts,
             &mut self.placement,
-            &Frame {
-                published_projection: self.published_projection,
-                projection: self.projection,
-                style: &self.style,
-                view: &self.view,
-                view_id: self.view_id,
-                tiles: &placed,
-                buckets: &buckets,
-                origins: &origins,
-                light: &self.light,
-                fonts: self.fonts.as_ref(),
-                patterns: patterns.as_ref(),
-                states: states.as_ref(),
-            },
+            &frame,
             &mut self.session,
-        )?;
+        ) {
+            Err(frame::FrameError::RegionFull) => {
+                self.arena.compact_region();
+                frame::emit_incremental(
+                    producer,
+                    &mut self.arena,
+                    &mut self.layouts,
+                    &mut self.placement,
+                    &frame,
+                    &mut self.session,
+                )?
+            }
+            other => other?,
+        };
         // A displacement is half an operation, and this is the other half. The drawable was
         // released so its slab could be emptied, and what re-announces it is the next frame that
         // draws it -- so a frame that displaces anything has to ask for one. Nothing else will:
