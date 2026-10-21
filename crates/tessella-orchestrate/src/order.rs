@@ -518,8 +518,30 @@ pub fn bindings_for(
             }
             // The same quad a raster layer draws and the same pass, over a slope field rather
             // than a picture. mbgl gives it its own layer group and the same translucent pass.
+            //
+            // And `raster_flags`, so unstencilled, for the one reason the ground above and the
+            // raster below share: a DEM is its own source and is covered at its own zoom, so a
+            // style whose vector layers are z14 draws these at z12 over a maxzoom-12 source and
+            // at z15 over a 256-pixel one. Asking for a stencil put those tiles in the mask
+            // buffer beside the vector zoom's, where one value per pixel settles it by draw
+            // order: the finer masks replace the coarser, and every drawable whose own zoom lost
+            // is rejected. Over Hong Kong at z14.6 that took the relief and the hillshade out of
+            // 61.4% of the frame and left the background showing behind them, which reads as a
+            // terrain that had not loaded -- the symptom `Content::Terrain` above was fixed for,
+            // from the same cause, with these two left behind.
+            //
+            // The clip would be a no-op in any case: the quad covers exactly its own tile, so
+            // there is nothing outside the tile square to cut. mbgl agrees twice over -- neither
+            // `RenderHillshadeLayer` nor `RenderColorReliefLayer` calls `setEnableStencil`, whose
+            // default is false, and only its fill, line, extrusion and puck layers call it at
+            // all. It disables *depth* on both as well, which this does not follow and which is
+            // a separate property from the clip.
+            //
+            // One decision rather than two: `frame::write_layer_state` emits a layer's clip set
+            // only if some drawable of it carries the bit, so dropping it here stops the masks
+            // being painted as well as stopping the test against them.
             Content::Hillshade(_) | Content::ColorRelief(_) => {
-                emit(0, view::fill_pass(), view::tiled_flags());
+                emit(0, view::fill_pass(), view::raster_flags());
             }
             // Translucent, whatever `raster-opacity` is: mbgl draws a raster layer in the
             // translucent pass and drops it from the frame entirely at an opacity of zero,
