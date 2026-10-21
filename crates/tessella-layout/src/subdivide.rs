@@ -442,41 +442,44 @@ fn fan(piece: &Convex, out: &mut Vec<[Position; 3]>) {
     }
 }
 
-/// Whether a triangle is too thin to be geometry once its vertices are integers.
+/// Whether a triangle has no area once its vertices are integers.
 ///
-/// Not just zero area. A cut that grazes a corner leaves a piece a few hundredths of a unit thick
-/// and as long as the cell -- half a tile at the grids this runs at -- and rounding turns that into
-/// a triangle with one or two square units of area spanning four thousand. It draws as a hairline
-/// streak across the map in the fill's own color.
+/// Zero area and nothing else. Such a triangle is three collinear points and rasterizes nothing,
+/// so dropping it costs no coverage and saves a vertex.
 ///
-/// That is a real artifact and this removes it. It is *not* the cause of the thicker wedges seen on
-/// a globe around z9.5: those survive this, and survive the triangle clipper being switched off
-/// altogether, which places them in `subdivide_ring` rather than here. Recorded so the next reader
-/// does not take this for the fix.
+/// # Why not the thin ones too
 ///
-/// The test is the triangle's *height* against its longest edge: twice the area is
-/// `|cross|`, so the height over that edge is `|cross| / length`, and anything under one unit is
-/// thinner than the integers it is expressed in. Such a triangle cannot be geometry -- whatever it
-/// came from was flattened by the rounding, not by this -- so dropping it removes an artifact
-/// rather than a feature.
+/// This used to drop any triangle whose *height* over its longest edge was under one unit, on the
+/// grounds that rounding had flattened it and that what survived drew as a hairline streak in the
+/// fill's own color. The height bound is not the same as no area: a cell-long piece under a unit
+/// thick still rounds to a hundred square units, and dropping it leaves a hole exactly where it
+/// was -- along a cut line, one pixel wide, running the length of the cut.
+///
+/// On a flat map neither the streak nor the hole is visible, because a tile unit is about a
+/// twentieth of a pixel at any zoom a tile is drawn at its own. On a terrain it is: a sliver's
+/// ends are displaced to different heights, so a piece a twentieth of a pixel wide lying flat
+/// covers real screen area once it is raised, and the hole left by dropping it shows whatever is
+/// painted on the ground underneath. Over Hong Kong at z13.6 and pitch 70 that was 421 single
+/// pixels of color relief speckled through the sea's fill, against a floor of 50 with the DEM
+/// served flat; keeping the thin pieces takes it to 88.
+///
+/// Measured against the two alternatives before settling here. Rebuilding every raised layer's
+/// height on the ground's own chord rather than on the bilinear field took 421 to 406 on its own,
+/// and cutting fills on the ground's cell diagonal as well took the pair to 59 -- a further 29
+/// pixels for a shader that reads four texels where it read one, a second line family in this
+/// clipper, and about twice the triangles. Neither is here; the hole was the defect and this is
+/// the hole.
+///
+/// It was never the cause of the thicker wedges seen on a globe around z9.5: those survive this
+/// either way, and survive the triangle clipper being switched off altogether, which places them
+/// in [`subdivide_ring`] rather than here. Recorded so the next reader does not take it for one.
 fn is_degenerate(triangle: &[Position; 3]) -> bool {
     let [a, b, c] = triangle;
     let abx = i64::from(b[0]) - i64::from(a[0]);
     let aby = i64::from(b[1]) - i64::from(a[1]);
     let acx = i64::from(c[0]) - i64::from(a[0]);
     let acy = i64::from(c[1]) - i64::from(a[1]);
-    let twice_area = (abx * acy - aby * acx).abs();
-    if twice_area == 0 {
-        return true;
-    }
-    // The longest edge, squared. Compared squared so the whole test stays in integers: a height
-    // below one unit is `twice_area < length`, which is `twice_area² < length²`.
-    let bcx = i64::from(c[0]) - i64::from(b[0]);
-    let bcy = i64::from(c[1]) - i64::from(b[1]);
-    let longest = (abx * abx + aby * aby)
-        .max(acx * acx + acy * acy)
-        .max(bcx * bcx + bcy * bcy);
-    twice_area * twice_area < longest
+    abx * acy - aby * acx == 0
 }
 
 /// One point back to the integers the vertex buffer carries.
