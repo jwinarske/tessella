@@ -345,3 +345,42 @@ fn a_sphere_edge_is_split_to_within_half_a_pixel() {
         }
     }
 }
+
+/// A thin wedge keeps its area through the split, rather than being dropped piece by piece.
+///
+/// The clipper used to drop any piece whose height over its longest edge was under one unit. A
+/// cell-long piece under a unit thick still has real area, and what it leaves behind is a hole
+/// along the cut — invisible on a flat map, and a line of single pixels of whatever is painted on
+/// the ground once the fill is raised onto a terrain.
+#[test]
+fn a_thin_wedge_keeps_its_area() {
+    // Six units thick at one end and zero at the other, so the cuts produce pieces on both sides
+    // of the old one-unit bound.
+    let wedge = [[0, 0], [4096, 4096], [4096, 4090]];
+    let before = double_area(&wedge);
+    let after = total_area(&subdivide_triangles(&[wedge], 256));
+    // Rounding moves each cut vertex by up to half a unit, which costs this wedge 0.07%. One
+    // percent is far above that and far below what dropping whole pieces costs: the bound this
+    // guards against read 5.3% short.
+    let slack = before / 100;
+    assert!(
+        (before - after).abs() <= slack,
+        "a {before} wedge came back as {after}, past a slack of {slack}",
+    );
+}
+
+/// Nothing emitted has zero area, whatever the cut did to it.
+///
+/// The other half of [`a_thin_wedge_keeps_its_area`]: thin is kept, flat is not. Three collinear
+/// points rasterize nothing and cost a vertex each.
+#[test]
+fn a_flattened_piece_is_still_dropped() {
+    for step in [64, 256, 512] {
+        for triangle in subdivide_triangles(&[[[0, 0], [4096, 0], [4096, 1]]], step) {
+            assert!(
+                double_area(&triangle) > 0,
+                "{triangle:?} survived the {step}-unit grid with no area",
+            );
+        }
+    }
+}
