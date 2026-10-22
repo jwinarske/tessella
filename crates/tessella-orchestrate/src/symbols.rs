@@ -244,6 +244,35 @@ pub struct ViewSymbols {
     /// after every bucket has competed, so what placement decided has to survive until then. Only
     /// labels that moved are in here.
     shifts: alloc::collections::BTreeMap<u32, (f32, f32)>,
+    /// Labels whose walk has found room at least once, so their dynamic buffer holds a real
+    /// position rather than what layout left there.
+    ///
+    /// The same reasoning as [`Self::orientations`], applied to where a label is rather than
+    /// which way round it faces. A label whose road runs out has to be hidden *instantly* if it
+    /// has never been walked: layout leaves the anchor in tile units and the shader reads that
+    /// buffer as label-plane coordinates, so drawing it at any opacity puts it thousands of
+    /// pixels from where it belongs. One that *has* been walked holds its last walk, and hiding
+    /// that one instantly is a pop with nothing behind it -- the position is a frame old, which
+    /// at an orbit's rate is a fraction of a degree, and it is fading to nothing anyway.
+    ///
+    /// Measured over 100 s of one pane orbiting at 25 s a turn: 33 labels went from full opacity
+    /// to none in a single frame, every one of them on the frame its walk lost room, and no
+    /// label did it twice. That is what reads as flicker on a rotating map, and it is road
+    /// labels, because a road's shape on screen is what the rotation changes.
+    ///
+    /// Never pruned, like the orientations beside it: an entry is four bytes against a cross-tile
+    /// id that the index is already holding, and an id that never comes back is one entry.
+    walked: alloc::collections::BTreeSet<u32>,
+    /// Labels whose walk found no room *this* frame, which the fades read as not placed.
+    ///
+    /// Placement and the walk are two different refusals and a label needs both to draw: one
+    /// decides whether it wins its space, the other whether its road still holds the text. Only
+    /// the first reached the fades, so a label that lost its road went from drawn to hidden in
+    /// one frame and back again the same way -- the pop this exists to remove.
+    ///
+    /// Replaced each frame rather than accumulated: it is this frame's verdict, and the walk
+    /// runs before the step that reads it.
+    lost_room: alloc::collections::BTreeSet<u32>,
 }
 
 impl ViewSymbols {
@@ -673,14 +702,25 @@ impl ViewSymbols {
     /// handing it one bucket at a time would keep only the last one.
     pub fn step(&mut self, increment: f32) {
         let decided = core::mem::take(&mut self.decided);
+        let lost = core::mem::take(&mut self.lost_room);
         self.fades.step(
             increment,
-            decided
-                .iter()
-                .map(|symbol| (symbol.cross_tile_id, symbol.text, symbol.icon)),
+            decided.iter().map(|symbol| {
+                // Two refusals, one fade. A label needs its space *and* its road, and only the
+                // first used to reach here -- so a road that ran out hid the text outright, on
+                // the frame it happened, and gave it back the same way. The walk runs before
+                // this step, so its verdict is this frame's rather than the last one's.
+                //
+                // The icon half is left alone: `write_line_positions` reports the text's room,
+                // and an icon that must go with it is hidden by the caller, which is how a
+                // shield whose number will not fit loses its shield.
+                let room = !lost.contains(&symbol.cross_tile_id);
+                (symbol.cross_tile_id, symbol.text && room, symbol.icon)
+            }),
             false,
         );
         self.decided = decided;
+        self.lost_room = lost;
     }
 
     /// Advances every fade to its resting value without placing again.
@@ -699,12 +739,17 @@ impl ViewSymbols {
     /// the frame placed at once.
     pub fn settle(&mut self, increment: f32) {
         let decided = core::mem::take(&mut self.decided);
+        let lost = core::mem::take(&mut self.lost_room);
         for _ in 0..8 {
             self.fades.step(
                 increment,
-                decided
-                    .iter()
-                    .map(|symbol| (symbol.cross_tile_id, symbol.text, symbol.icon)),
+                decided.iter().map(|symbol| {
+                    // The same conjunction `step` makes, for the same reason. A settled frame
+                    // that ignored the walk would come to rest with a label opaque at a
+                    // position its road no longer holds.
+                    let room = !lost.contains(&symbol.cross_tile_id);
+                    (symbol.cross_tile_id, symbol.text && room, symbol.icon)
+                }),
                 false,
             );
             if self.fades.settled() {
@@ -712,6 +757,7 @@ impl ViewSymbols {
             }
         }
         self.decided = decided;
+        self.lost_room = lost;
     }
 
     /// The same, for the icon half, which has a decision of its own.
@@ -736,6 +782,18 @@ impl ViewSymbols {
                 *slot = packed;
             }
         }
+    }
+
+    /// Whether this label's walk has ever found room, so its dynamic buffer holds a position.
+    ///
+    /// What a caller needs to know before it hides a label whose road ran out. Layout leaves the
+    /// anchor in *tile* units and the shader reads that buffer as label-plane coordinates, so a
+    /// label drawn without ever having been walked lands thousands of pixels from where it
+    /// belongs and has to go instantly. One that has been walked holds its last walk, and fades
+    /// from there.
+    #[must_use]
+    pub fn has_walked(&self, cross_tile_id: u32) -> bool {
+        self.walked.contains(&cross_tile_id)
     }
 
     /// Writes this frame's opacities into the buffer's per-vertex slots.
@@ -951,6 +1009,15 @@ impl ViewSymbols {
             // Neither way round found room, which is what the caller hides the icon for.
             if attempted && !any_room {
                 without_room.push(label.cross_tile_id);
+            } else if any_room {
+                self.walked.insert(label.cross_tile_id);
+            }
+            if attempted {
+                if any_room {
+                    self.lost_room.remove(&label.cross_tile_id);
+                } else {
+                    self.lost_room.insert(label.cross_tile_id);
+                }
             }
         }
         without_room

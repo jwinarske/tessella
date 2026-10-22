@@ -3614,8 +3614,20 @@ fn place_symbols(
         // That is the label that flies across the map.
         //
         // The icon half below has always done this. The text half is what was missing.
+        //
+        // Only for a label that has never been walked, though. The position that cannot be
+        // trusted is the one *layout* left -- the anchor in tile units -- and a label walked on
+        // any earlier frame is not holding that, it is holding its last walk. Hiding that one
+        // instantly is a pop with nothing behind it: the position is a frame old, a fraction of
+        // a degree at an orbit's rate, and it is fading to nothing anyway. Measured over 100 s
+        // of one pane turning, 33 labels went from full opacity to none in a single frame, every
+        // one on the frame its walk lost room. See `ViewSymbols::walked`, and the orientations
+        // beside it, which keep what a fading label last drew with for the same reason.
         for label in &labels {
             if !without_room.contains(&label.cross_tile_id) {
+                continue;
+            }
+            if held.symbols.has_walked(label.cross_tile_id) {
                 continue;
             }
             let range = label.laid_out.vertices.clone();
