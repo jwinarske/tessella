@@ -209,6 +209,20 @@ pub struct Map {
     /// A patterned bucket's content stamp carries it, so a sheet handed over after that bucket
     /// was encoded re-announces it. See [`Self::set_sprites`].
     sprites_rev: u64,
+    /// Frames the slab region could not take until it had been compacted whole, and frames it
+    /// could not take even then.
+    ///
+    /// Read as a pair. A refusal is a frame that was not published and a map holding its last
+    /// picture while the camera moves on without it, which is the failure worth finding; a
+    /// compaction is the frame before that one, the region coping, and a count of them climbing
+    /// with no refusals is a map that is going to start refusing. Neither is visible in a status:
+    /// the sources are ready, nothing is pending, and the tick's own result is a thing a caller
+    /// sees once and may not keep.
+    ///
+    /// Monotonic from the map's creation, like every other counter a consumer polls, so two
+    /// readings a second apart give a rate.
+    region_compactions: u64,
+    region_refusals: u64,
     light: Light,
     /// Survives every tick, which is what makes an id belong to a drawable rather than to a
     /// frame.
@@ -355,6 +369,8 @@ impl Map {
             published_projection: None,
             view_id,
             sprites_rev: 0,
+            region_compactions: 0,
+            region_refusals: 0,
             light,
             session: Session::new(),
             arena,
@@ -377,6 +393,16 @@ impl Map {
             state_rev: 0,
             zoom: ZoomHistory::new(),
         }
+    }
+
+    /// Frames the slab region could not take until compaction, and frames it could not take at
+    /// all.
+    ///
+    /// `(compactions, refusals)`, monotonic. See the fields for what each means and why they are
+    /// read together.
+    #[must_use]
+    pub fn region_pressure(&self) -> (u64, u64) {
+        (self.region_compactions, self.region_refusals)
     }
 
     /// The light this scene is lit by, resolved from the style.
@@ -1537,15 +1563,27 @@ impl Map {
             &mut self.session,
         ) {
             Err(frame::FrameError::RegionFull) => {
+                self.region_compactions += 1;
                 self.arena.compact_region();
-                frame::emit_incremental(
+                match frame::emit_incremental(
                     producer,
                     &mut self.arena,
                     &mut self.layouts,
                     &mut self.placement,
                     &frame,
                     &mut self.session,
-                )?
+                ) {
+                    Ok(emitted) => emitted,
+                    Err(why) => {
+                        // Counted before it is returned, because a caller that drops the result
+                        // -- or logs it once and moves on -- is exactly the caller this exists
+                        // for. See `region_refusals`.
+                        if matches!(why, frame::FrameError::RegionFull) {
+                            self.region_refusals += 1;
+                        }
+                        return Err(why);
+                    }
+                }
             }
             other => other?,
         };

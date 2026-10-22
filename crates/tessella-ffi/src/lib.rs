@@ -1971,6 +1971,48 @@ pub unsafe extern "C" fn tessella_pending(map: MapHandle, out_pending: *mut u64)
     })
 }
 
+/// How hard the slab region is working, as a pair of monotonic counts.
+///
+/// `out_compactions` is frames the region could not take until it had been compacted whole;
+/// `out_refusals` is frames it could not take even then. A refusal is a frame that was *not
+/// published*: the consumer keeps the last picture it was given while the camera moves on
+/// without it, and nothing else a caller can poll says so. The sources are ready, nothing is
+/// pending, and [`tessella_tick`]'s own [`Status::RegionFull`] is a value a caller sees once and
+/// may log, ignore or lose -- which is how a pane sat frozen on one city for an afternoon while
+/// its HUD read `ready`.
+///
+/// Read them as a pair. Compactions climbing with refusals at zero is a region coping, and it is
+/// the warning before the failure rather than the failure; the answer to both is a larger
+/// `slab_capacity`. Either may be read without the other being interesting, but neither alone
+/// says whether the map is in trouble.
+///
+/// Monotonic from the map's creation, so two readings give a rate.
+///
+/// # Safety
+///
+/// `map` must be live, and both out pointers valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_region_pressure(
+    map: MapHandle,
+    out_compactions: *mut u64,
+    out_refusals: *mut u64,
+) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_ref() }) else {
+            return Status::NoSuchMap;
+        };
+        if out_compactions.is_null() || out_refusals.is_null() {
+            return Status::NullArgument;
+        }
+        let (compactions, refusals) = state.map.region_pressure();
+        unsafe {
+            *out_compactions = compactions;
+            *out_refusals = refusals;
+        }
+        Status::Ok
+    })
+}
+
 /// The call §16 traded for a non-blocking [`tessella_create`]. A consumer holding a handle and
 /// looking at an empty map cannot tell a style still resolving from one whose sources will never
 /// answer, and inferring it from the absence of tiles gets it wrong in both directions -- so it
