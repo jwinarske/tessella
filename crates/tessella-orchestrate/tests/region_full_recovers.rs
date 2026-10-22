@@ -153,3 +153,91 @@ fn a_region_that_fills_compacts_and_keeps_drawing() {
         ROUNDS / 4
     );
 }
+
+/// Drives the same churn through a region of `bytes`, and reports what it cost.
+///
+/// `(compactions, refusals, refused)` -- the two counters, and the number of ticks that actually
+/// came back `RegionFull`, which is what the second is checked against.
+fn cost_of(bytes: usize) -> (u64, u64, usize) {
+    let style = Style::parse(STYLE).expect("the style parses");
+    let tiles = Warm::new(&style);
+
+    let mut ring_region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: sized by `region_size`, eight-aligned as a `Vec<u64>`, outlives both halves.
+    let (mut producer, mut consumer) =
+        unsafe { ring::init(ring_region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    let mut region = vec![0u8; bytes];
+    // SAFETY: `region` outlives the arena and the map, and nothing else writes it.
+    let arena = SlabArena::in_region(
+        unsafe { Mapping::new(region.as_mut_ptr(), region.len()) },
+        SLOTS,
+    );
+    let mut map = Map::with_arena(style, view(-0.11), ViewId(0), arena);
+
+    assert_eq!(
+        map.region_pressure(),
+        (0, 0),
+        "a map that has emitted nothing has nothing to report"
+    );
+
+    let mut refused = 0usize;
+    const ROUNDS: usize = 600;
+    for round in 0..ROUNDS {
+        #[allow(clippy::cast_precision_loss)]
+        let longitude = -0.11 + (round as f64) * 0.37;
+        map.look_at(view(longitude));
+        if let Err(why) = map.tick(&mut producer, &tiles)
+            && format!("{why:?}").contains("RegionFull")
+        {
+            refused += 1;
+        }
+        while let Some(record) = consumer.peek() {
+            let consumed = record.consumed();
+            consumer.advance(consumed);
+        }
+    }
+
+    let (compactions, refusals) = map.region_pressure();
+    (compactions, refusals, refused)
+}
+
+/// What the region cost, as a pair a consumer can poll.
+///
+/// The recovery above is invisible from outside. A tick that compacted and then succeeded returns
+/// `Ok`; a tick that failed returns a status the caller sees once and may log, ignore or lose. So
+/// a map under pressure and a map coasting look identical to anything polling one -- the sources
+/// are ready, nothing is pending, and the picture is whatever it last managed. That is how a pane
+/// of the harbor demo sat frozen on one city for an afternoon with its HUD reading `ready`.
+///
+/// Two regions, because the pair only means something read together. Seven megabytes is the size
+/// the recovery test uses and it copes: compaction runs and every frame still lands. Four does
+/// not, and there the refusals have to agree with what the ticks returned -- which is the half a
+/// counter can get wrong on its own, and the half that is hollow to assert on a region that never
+/// refuses anything.
+#[test]
+fn the_region_reports_what_it_cost() {
+    let (coping, coping_refusals, coping_refused) = cost_of(7 << 20);
+    assert!(
+        coping > 0,
+        "the region was never compacted, so this drove nothing and asserts nothing"
+    );
+    assert_eq!(
+        coping_refusals as usize, coping_refused,
+        "the refusals counted disagree with what the ticks returned"
+    );
+
+    let (full, refusals, refused) = cost_of(4 << 20);
+    assert!(
+        refusals > 0,
+        "a four megabyte region refused nothing, so the agreement below is vacuous"
+    );
+    assert_eq!(
+        refusals as usize, refused,
+        "the refusals counted disagree with what the ticks returned"
+    );
+    assert!(
+        full >= refusals,
+        "more refusals than compactions, which cannot happen: {full} and {refusals}"
+    );
+}

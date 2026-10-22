@@ -67,6 +67,19 @@ int main(int argc, char** argv) {
     printf("null_out %d\n", (int)tessella_create(&config, 0.0, 0.0, 0.0, NULL));
     printf("null_map_tick %d\n", (int)tessella_tick(NULL));
 
+    /* The region's pressure. Zero and zero on a map that has emitted nothing, which is the point:
+     * a counter a consumer polls has to answer before there is anything to report. Declared in
+     * the header and reached from C is the half that has been missed before -- region download
+     * was complete in Rust and unreachable from `tessella.h` for a release. */
+    uint64_t compactions = 7;
+    uint64_t refusals = 7;
+    printf("pressure %d %llu %llu\n",
+           (int)tessella_region_pressure(map, &compactions, &refusals),
+           (unsigned long long)compactions, (unsigned long long)refusals);
+    printf("pressure_null %d\n", (int)tessella_region_pressure(map, NULL, &refusals));
+    printf("pressure_no_map %d\n",
+           (int)tessella_region_pressure(NULL, &compactions, &refusals));
+
     /* The store. A cached map opens it at create -- the fetching starts on the first tick, so this
      * says the file was opened and nothing was asked of the network. */
     if (cache_path != NULL) {

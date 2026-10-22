@@ -756,6 +756,24 @@ tessella_result tessella_tick(tessella_map* map);
  * A consumer driving a progress indicator reads the same number. */
 tessella_result tessella_pending(tessella_map* map, uint64_t* out_pending);
 
+/* How hard the slab region is working, as a pair of monotonic counts.
+ *
+ * `out_compactions` is frames the region could not take until it had been compacted whole;
+ * `out_refusals` is frames it could not take even then. A refusal is a frame that was *not
+ * published*: the consumer keeps the last picture it was given while the camera moves on without
+ * it, and nothing else a caller can poll says so. The sources are ready, tessella_pending is
+ * zero, and tessella_tick's own TESSELLA_REGION_FULL is a value a caller sees once and may log,
+ * ignore or lose.
+ *
+ * Read them as a pair. Compactions climbing with refusals at zero is a region coping -- the
+ * warning before the failure rather than the failure -- and the answer to both is a larger
+ * `slab_capacity`.
+ *
+ * Monotonic from the map's creation, so two readings give a rate. */
+tessella_result tessella_region_pressure(tessella_map* map,
+                                         uint64_t* out_compactions,
+                                         uint64_t* out_refusals);
+
 tessella_result tessella_status(tessella_map* map,
                                int32_t* out_readiness,
                                char* reason,
