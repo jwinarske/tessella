@@ -5606,6 +5606,19 @@ against; none is scheduled.
   consumer this repo does not build. Invisible to the oracle, so the first test passes; nothing
   else about it has been thought through.
 
+- **Everything from here to the end of this section is a closed thread whose entries still say
+  "Open".** Kept for the reasoning and the wrong turns; the numbers and the statuses are both
+  stale, and nothing below is open work. Two instrument faults account for all of it -- an oracle
+  captured at a camera nobody wrote down, and a material package that renders black and reports
+  success -- which "Three pitched entries above do not reproduce, and the instrument is why"
+  retires entry by entry. The work then ran to completion from there: the pitched gap was the
+  walk's font size, every label competes rather than being filtered before the competition, the
+  icon scene reaches zero once a pitched icon takes a sampler, and "The upright test, and the
+  pitched frame closes" ends it -- flat exact but for 63 pixels at z15 across the Seattle sweep,
+  pitched under 0.025% everywhere, and what is left anywhere is polygon and glyph edges. Held at
+  tip 2026-10-23: the committed sweep's `families_p` row reads 4 / 16 / 0 / 2 / 30, which is what
+  it is documented to hold.
+
 - **Parity was only ever measured flat, and the probe can now be pitched.** `render_probe` took a
   latitude, a longitude, a zoom and a viewport, so every number recorded above was taken with the
   camera at pitch zero and bearing zero. `mbgl-render` has taken `--pitch` and `--bearing` all
@@ -5687,10 +5700,11 @@ against; none is scheduled.
   it is the next candidate for what is left.
 
 - **The probe is not reliably deterministic, and that has to be fixed before more icon work.**
-  *Open, and blocking.* Chasing what was left of `icons_only` at pitch produced results that would
-  not reproduce. The same binary, the same style, the same camera, eight runs: 0, 0, 9,520, 9,520,
-  272, 272, 272 gross pixels, and then eight consecutive 272s. Every run reported `quiescent 1`
-  and the same 27 renderables; what differed was `records`, which ranged 120 to 136.
+  *Open, and blocking -- closed; see the head of this thread.* Chasing what was left of
+  `icons_only` at pitch produced results that would not reproduce. The same binary, the same
+  style, the same camera, eight runs: 0, 0, 9,520, 9,520, 272, 272, 272 gross pixels, and then
+  eight consecutive 272s. Every run reported `quiescent 1` and the same 27 renderables; what
+  differed was `records`, which ranged 120 to 136.
 
   The quiescence condition is the wait loop's own comment made honest -- it was added for exactly
   this, after "6,502, 8,654 and 9,885 pixels of text" from one frame -- and it is too weak.
@@ -5784,10 +5798,10 @@ against; none is scheduled.
   reproduce -- but the icon scene at pitch is unexplained rather than half-fixed, and it is the
   largest open number here by a factor of ten.
 
-- **Pitched icons are a cover problem, not a collision problem.** *Located, not fixed.* With a
-  probe that reproduces, the icon scene at pitch 45 is 34,121 gross pixels and draws **8 icons
-  against the oracle's 148**. Instrumenting both sides at that camera says where it comes from,
-  and it is not where the last three fixes were:
+- **Pitched icons are a cover problem, not a collision problem.** *Located, not fixed --
+  retired; see the head of this thread.* With a probe that reproduces, the icon scene at pitch
+  45 is 34,121 gross pixels and draws **8 icons against the oracle's 148**. Instrumenting both
+  sides at that camera says where it comes from, and it is not where the last three fixes were:
 
   | | icon candidates offered | placed | drawn | tiles |
   | --- | --- | --- | --- | --- |
@@ -5883,10 +5897,10 @@ against; none is scheduled.
   coincidence at pitch zero would stop holding.
 
 - **The pitched probe does not reproduce, and every pitched number in this document is therefore
-  suspect.** *Open, and it invalidates more than the last entry did.* Five identical runs of the
-  icon scene at pitch 45 drew 11, 8, 11, 53 and 0 icons; the last produced an entirely black frame,
-  630,000 gross pixels against the oracle. The "8 icons against 148" of the previous entry was one
-  sample of that distribution reported as a fact.
+  suspect.** *Open, and it invalidates more than the last entry did -- closed; see the head of this
+  thread.* Five identical runs of the icon scene at pitch 45 drew 11, 8, 11, 53 and 0 icons; the
+  last produced an entirely black frame, 630,000 gross pixels against the oracle. The "8 icons
+  against 148" of the previous entry was one sample of that distribution reported as a fact.
 
   So the following, all recorded above as results, are unsupported: the perspective ratio taking
   poi-labels from 10,104 to 2,745 and the all-families scene from 8,622 to 3,964; the viewport
@@ -5917,11 +5931,11 @@ against; none is scheduled.
   quads visible at pitch and 237 flat. Those are the numbers to build on.
 
 - **The frame depends on tile arrival order, and that is a defect in this frontend rather than in
-  the probe.** *Open, and it outranks the pitch parity gap.* The probe now settles on the image --
-  it ticks on and re-reads the framebuffer until two consecutive captures agree, bounded, and says
-  whether it got there. It reports `stable_rounds 0` on every run: the image is already stable
-  *within* a run. So the probe was never measuring too early, and the previous two entries blaming
-  it were wrong about where the fault is.
+  the probe.** *Open, and it outranks the pitch parity gap -- closed; see the head of this
+  thread.* The probe now settles on the image -- it ticks on and re-reads the framebuffer until two
+  consecutive captures agree, bounded, and says whether it got there. It reports `stable_rounds 0`
+  on every run: the image is already stable *within* a run. So the probe was never measuring too
+  early, and the previous two entries blaming it were wrong about where the fault is.
 
   | | six runs |
   | --- | --- |
